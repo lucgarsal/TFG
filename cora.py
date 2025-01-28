@@ -1,3 +1,6 @@
+import torch
+import torch.nn.functional as F
+from torch_geometric.nn import GCNConv
 """En primer lugar, importamos la clase Planetoid de torch_geometric.datasets. 
 A continuación, instanciamos un objeto de la clase Planetoid con los argumentos root='/tmp/Cora' y name='Cora'. 
 Accedemos al primer elemento del conjunto de datos y lo almacenamos en la variable data. 
@@ -26,21 +29,22 @@ print(f'No es dirigido: {data.is_undirected()}')
 
 
 #Mostramos la matriz de enlaces en formato COO.
-data.edge_index.t()
+print(data.edge_index.t())
 
 #Mostramos las etiquetas de los primeros 100 nodos 
-data.y[0:100] 
+print(data.y[0:100])
 
 #Mostramos la máscara que indica que nodos son para entrenamiento viendo que son los primeros 140 
-data.train_mask[0:150] 
+print(data.train_mask[0:150])
+
+
+
 
 """Ahora, vamos a definir un modelo para realizar una clasificación de los nodos. Para ello, vamos a usar dos capas GCNConv que implementarán 
 la Graph Neural Network. Después de la primera GCN (convierte de la dimensión número de features al número de canales 16) añadimos un ReLU y 
 después de la segunda (convierte de 16 al número de clases) un softmax sobre el número de clases. Como se puede ver, las capas se aplican sobre 
-los datos con los features de cada nodo y sobre edge_index, que contiene la estructura del grafo."""
-import torch
-import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
+los datos con los features de cada nodo y sobre edge_index, que contiene la estructura del grafo.
+
 
 class GCN(torch.nn.Module):
     def __init__(self):
@@ -61,8 +65,8 @@ class GCN(torch.nn.Module):
 model = GCN()
 print(model)
 
-"""Ahora, vamos a entrenar el modelo usando 250 epochs (rondas) de los datos. 
-Como se puede observar, usamos la máscara de entrenamiento para decir cuáles son los nodos que se tienen que usar para entrenar el modelo."""
+Ahora, vamos a entrenar el modelo usando 250 epochs (rondas) de los datos. 
+Como se puede observar, usamos la máscara de entrenamiento para decir cuáles son los nodos que se tienen que usar para entrenar el modelo.
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
 
 model.train()
@@ -79,3 +83,4 @@ _, pred = model(data).max(dim=1)
 correct = int(pred[data.test_mask].eq(data.y[data.test_mask]).sum().item())
 acc = correct / int(data.test_mask.sum())
 print('Accuracy: {:.4f}'.format(acc))
+"""
