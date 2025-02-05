@@ -1,13 +1,12 @@
 # TFG Lucía García Salido
 
 ## Graph Neural Networks
+Trabajo Fin de Grado sobre Redes Neuronales de Grafos. Realizaremos un estudio de embeddings y GNN para completado de grafos y predicción de aristas.
+Los objetivos serán los siguientes:
+1) A partir de las características de los nodos, decidir si están unidos o no.
+2) A partir de los embeddings generados, decidir si dos nodos están unidos.
+3) Usando los embeddings y las características, aplicar funciones de redes neuronales gráficas
+4) Usar capas neuronales para la clasificación.
 
-### Primera toma de contacto
-https://mlearninglab.com/2021/05/02/graph-neural-networks-con-pytorch-geometric/
-
-En primer lugar, voy a realizar una visualización y entrenamiento sencillos. Para ello, usaremos un dataset disponible en la librería pytorch. 
-De los datasets que vienen con la librería, vamos a importar Cora, una red de citas donde los nodos representan documentos, 
-y ver sus características.
-Aunque es un ejercicio sencillo, he tenido que instalar previamente todas las librerías de torch, así como Microsoft C++ y algunas extensiones en Visual.
 
 

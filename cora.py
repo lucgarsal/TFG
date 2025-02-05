@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+import os
+
 """En primer lugar, importamos la clase Planetoid de torch_geometric.datasets. 
 A continuación, instanciamos un objeto de la clase Planetoid con los argumentos root='/tmp/Cora' y name='Cora'. 
 Accedemos al primer elemento del conjunto de datos y lo almacenamos en la variable data. 
@@ -9,7 +11,6 @@ Finalmente, imprimimos la información solicitada."""
 from torch_geometric.datasets import Planetoid
 
 dataset = Planetoid(root='/tmp/Cora', name='Cora')
-
 data = dataset[0]
 print(data)
 
@@ -37,50 +38,90 @@ print(data.y[0:100])
 #Mostramos la máscara que indica que nodos son para entrenamiento viendo que son los primeros 140 
 print(data.train_mask[0:150])
 
-
-
-
-"""Ahora, vamos a definir un modelo para realizar una clasificación de los nodos. Para ello, vamos a usar dos capas GCNConv que implementarán 
-la Graph Neural Network. Después de la primera GCN (convierte de la dimensión número de features al número de canales 16) añadimos un ReLU y 
-después de la segunda (convierte de 16 al número de clases) un softmax sobre el número de clases. Como se puede ver, las capas se aplican sobre 
-los datos con los features de cada nodo y sobre edge_index, que contiene la estructura del grafo.
-
+from torch_geometric.nn import GCNConv
+import torch.nn.functional as F
+"""
+Este código define un modelo de Red Convolucional Gráfica (GCN) utilizando la librería PyTorch Geometric. En primer lugar, se importan los módulos necesarios:
+GCNConv de torch_geometric.nn y F de torch.nn.functional. A continuación, se define una clase llamada GCN, que hereda de torch.nn.Module. 
+El método constructor __init__ toma un parámetro hidden_channels, que especifica el número de canales ocultos en las capas GCN. 
+En el constructor, se establece una semilla aleatoria para la reproducibilidad, y se definen dos capas GCN utilizando GCNConv. 
+La primera capa toma como entrada el número de características del conjunto de datos (dataset.num_features) y el número de canales ocultos, 
+y la segunda capa toma como entrada el número de canales ocultos y el número de clases del conjunto de datos (dataset.num_classes). 
+El método forward toma como entrada las características de los nodos x y los índices de las aristas edge_index, y aplica las dos capas GCN en secuencia. 
+Entre las capas, se aplica una función de activación ReLU a la salida de la primera capa y una capa de abandono con una probabilidad de 0,5 para evitar el sobreajuste. 
+Por último, se crea una instancia de la clase GCN con hidden_channels=16, y se imprime el modelo para mostrar la estructura de las dos capas GCN."""
 
 class GCN(torch.nn.Module):
-    def __init__(self):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(dataset.num_node_features, 16)
-        self.conv2 = GCNConv(16, dataset.num_classes)
+    def __init__(self, hidden_channels):
+        super().__init__()
+        torch.manual_seed(1234567)
+        self.conv1 = GCNConv(dataset.num_features, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, dataset.num_classes)
 
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
-
+    def forward(self, x, edge_index):
         x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = F.dropout(x, training=self.training)
+        x = x.relu()
+        x = F.dropout(x, p=0.5, training=self.training)
         x = self.conv2(x, edge_index)
+        return x
 
-        return F.log_softmax(x, dim=1)
-
-model = GCN()
+model = GCN(hidden_channels=16)
 print(model)
 
-Ahora, vamos a entrenar el modelo usando 250 epochs (rondas) de los datos. 
-Como se puede observar, usamos la máscara de entrenamiento para decir cuáles son los nodos que se tienen que usar para entrenar el modelo.
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+#Visualización de los datos no entrenados
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
 
-model.train()
-for epoch in range(250):
-    optimizer.zero_grad()
-    out = model(data)
-    loss = F.nll_loss(out[data.train_mask], data.y[data.train_mask])
-    loss.backward()
-    optimizer.step()
+def visualize(h, color, filename):
+    z = TSNE(n_components=2).fit_transform(h.detach().cpu().numpy())
 
-#Por último, evaluamos el modelo usando la máscara que indica los nodos de test y vemos que el modelo tiene una buena tasa de acierto.
+    plt.figure(figsize=(10,10))
+    plt.xticks([])
+    plt.yticks([])
+
+    plt.scatter(z[:, 0], z[:, 1], s=70, c=color, cmap="Set2")
+    if not os.path.exists('images'):
+        os.makedirs('images')
+    plt.savefig(f'images/{filename}')
+    plt.show()
+
 model.eval()
-_, pred = model(data).max(dim=1)
-correct = int(pred[data.test_mask].eq(data.y[data.test_mask]).sum().item())
-acc = correct / int(data.test_mask.sum())
-print('Accuracy: {:.4f}'.format(acc))
-"""
+
+#Entrenaremos nuestro modelo en 100 épocas utilizando la optimización de Adam y la función de pérdida de entropía cruzada. 
+out = model(data.x, data.edge_index)
+visualize(out, color=data.y, filename='CoraUntrained.png')
+
+model = GCN(hidden_channels=16)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+criterion = torch.nn.CrossEntropyLoss()
+
+def train():
+      model.train()
+      optimizer.zero_grad()
+      out = model(data.x, data.edge_index)
+      loss = criterion(out[data.train_mask], data.y[data.train_mask])
+      loss.backward()
+      optimizer.step()
+      return loss
+
+def test():
+      model.eval()
+      out = model(data.x, data.edge_index)
+      pred = out.argmax(dim=1)
+      test_correct = pred[data.test_mask] == data.y[data.test_mask]
+      test_acc = int(test_correct.sum()) / int(data.test_mask.sum())
+      return test_acc
+
+#Entrenamos el modelo durante 100 épocas e imprimimos la pérdida en cada época.
+for epoch in range(1, 101):
+    loss = train()
+    print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}')
+
+#Evaluamos el modelo y obtenemos la precisión en el conjunto de pruebas.
+test_acc = test()
+print(f'Test Accuracy: {test_acc:.4f}')
+
+#Visualizamos los datos entrenados
+model.eval()
+out = model(data.x, data.edge_index)
+visualize(out, color=data.y, filename='CoraTrained.png')
