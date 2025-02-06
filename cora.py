@@ -2,13 +2,17 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 import os
-
+from torch.nn import Linear
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+from torch_geometric.nn import GCNConv
 """En primer lugar, importamos la clase Planetoid de torch_geometric.datasets. 
 A continuación, instanciamos un objeto de la clase Planetoid con los argumentos root='/tmp/Cora' y name='Cora'. 
 Accedemos al primer elemento del conjunto de datos y lo almacenamos en la variable data. 
 Finalmente, imprimimos la información solicitada."""
 
 from torch_geometric.datasets import Planetoid
+
 
 dataset = Planetoid(root='/tmp/Cora', name='Cora')
 data = dataset[0]
@@ -38,8 +42,74 @@ print(data.y[0:100])
 #Mostramos la máscara que indica que nodos son para entrenamiento viendo que son los primeros 140 
 print(data.train_mask[0:150])
 
-from torch_geometric.nn import GCNConv
-import torch.nn.functional as F
+#Función de visualización del grafo
+def visualize(h, color, filename):
+    z = TSNE(n_components=2).fit_transform(h.detach().cpu().numpy())
+
+    plt.figure(figsize=(10,10))
+    plt.xticks([])
+    plt.yticks([])
+
+    plt.scatter(z[:, 0], z[:, 1], s=70, c=color, cmap="Set2")
+    if not os.path.exists('images'):
+        os.makedirs('images')
+    plt.savefig(f'images/{filename}')
+    plt.show()
+
+#Construyo un perceptrón multicapa MLP que opera únicamente sobre las características de los nodos.
+#Este será el paso inicial en todos los dataset para ver cómo mejora la clasificación según cambiamos los criterios
+
+class MLP(torch.nn.Module):
+    def __init__(self, hidden_channels):
+        super().__init__()
+        torch.manual_seed(12345)
+        self.lin1 = Linear(dataset.num_features, hidden_channels)
+        self.lin2 = Linear(hidden_channels, dataset.num_classes)
+
+    def forward(self, x):
+        x = self.lin1(x)
+        x = x.relu()
+        x = F.dropout(x, p=0.5, training=self.training)
+        x = self.lin2(x)
+        return x
+
+model_feature = MLP(hidden_channels=16)
+out = model_feature(data.x)
+visualize(out, color=data.y, filename='CoraUntrained_features.png')
+criterion = torch.nn.CrossEntropyLoss()  # Define loss criterion.
+optimizer = torch.optim.Adam(model_feature.parameters(), lr=0.01, weight_decay=5e-4)  # Define optimizer.
+
+#Definimos el entrenamiento con la diferencia de que solo usaremos las características de los nodos
+def train():
+      model_feature.train()
+      optimizer.zero_grad()  
+      out = model_feature(data.x)  
+      loss = criterion(out[data.train_mask], data.y[data.train_mask])  # Compute the loss solely based on the training nodes.
+      loss.backward()
+      optimizer.step()  
+      return loss
+
+def test():
+      model_feature.eval()
+      out = model_feature(data.x)
+      pred = out.argmax(dim=1)  
+      test_correct = pred[data.test_mask] == data.y[data.test_mask]  
+      test_acc = int(test_correct.sum()) / int(data.test_mask.sum())  
+      return test_acc
+
+for epoch in range(1, 201):
+    loss = train()
+    print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}')
+
+test_acc = test()
+print(f'Test Accuracy: {test_acc:.4f}')
+
+model_feature.eval()
+#TODO
+out = model_feature(data.x, data.edge_index)
+visualize(out, color=data.y, filename='CoraTrained_feature.png')
+
+
 """
 Este código define un modelo de Red Convolucional Gráfica (GCN) utilizando la librería PyTorch Geometric. En primer lugar, se importan los módulos necesarios:
 GCNConv de torch_geometric.nn y F de torch.nn.functional. A continuación, se define una clase llamada GCN, que hereda de torch.nn.Module. 
@@ -65,54 +135,36 @@ class GCN(torch.nn.Module):
         x = self.conv2(x, edge_index)
         return x
 
-model = GCN(hidden_channels=16)
-print(model)
+model_gcn = GCN(hidden_channels=16)
+print(model_gcn)
 
-#Visualización de los datos no entrenados
-import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
-
-def visualize(h, color, filename):
-    z = TSNE(n_components=2).fit_transform(h.detach().cpu().numpy())
-
-    plt.figure(figsize=(10,10))
-    plt.xticks([])
-    plt.yticks([])
-
-    plt.scatter(z[:, 0], z[:, 1], s=70, c=color, cmap="Set2")
-    if not os.path.exists('images'):
-        os.makedirs('images')
-    plt.savefig(f'images/{filename}')
-    plt.show()
-
-model.eval()
-
-#Entrenaremos nuestro modelo en 100 épocas utilizando la optimización de Adam y la función de pérdida de entropía cruzada. 
-out = model(data.x, data.edge_index)
+model_gcn.eval()
+out = model_gcn(data.x, data.edge_index)
 visualize(out, color=data.y, filename='CoraUntrained.png')
 
-model = GCN(hidden_channels=16)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+model_gcn = GCN(hidden_channels=16)
+optimizer = torch.optim.Adam(model_gcn.parameters(), lr=0.01, weight_decay=5e-4)
 criterion = torch.nn.CrossEntropyLoss()
 
+#Entrenaremos nuestro modelo en 100 epoch utilizando la optimización de Adam y la función de pérdida de entropía cruzada. 
 def train():
-      model.train()
+      model_gcn.train()
       optimizer.zero_grad()
-      out = model(data.x, data.edge_index)
+      out = model_gcn(data.x, data.edge_index)
       loss = criterion(out[data.train_mask], data.y[data.train_mask])
       loss.backward()
       optimizer.step()
       return loss
 
 def test():
-      model.eval()
-      out = model(data.x, data.edge_index)
+      model_gcn.eval()
+      out = model_gcn(data.x, data.edge_index)
       pred = out.argmax(dim=1)
       test_correct = pred[data.test_mask] == data.y[data.test_mask]
       test_acc = int(test_correct.sum()) / int(data.test_mask.sum())
       return test_acc
 
-#Entrenamos el modelo durante 100 épocas e imprimimos la pérdida en cada época.
+#Entrenamos el modelo durante 100 epoch e imprimimos la pérdida en cada época.
 for epoch in range(1, 101):
     loss = train()
     print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}')
@@ -122,6 +174,6 @@ test_acc = test()
 print(f'Test Accuracy: {test_acc:.4f}')
 
 #Visualizamos los datos entrenados
-model.eval()
-out = model(data.x, data.edge_index)
+model_gcn.eval()
+out = model_gcn(data.x, data.edge_index)
 visualize(out, color=data.y, filename='CoraTrained.png')

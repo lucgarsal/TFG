@@ -3,6 +3,7 @@ import networkx as nx
 import os
 import matplotlib.pyplot as plt
 from torch_geometric.utils import to_networkx
+import numpy as np
 
 # Función de visualización del grafo que guarda la imagen en la carpeta images con el nombre dado como parámetro
 
@@ -119,10 +120,11 @@ for epoch in range(401):
     if epoch % 50 == 0:
         visualize_embedding(h, color=data.y, filename='karateClubEpoch.png', epoch=epoch, loss=loss)
         time.sleep(0.3)
-
+        ssssss
 #Como podemos ver, el modelo aprende a agrupar los nodos de acuerdo a su clase a medida que el entrenamiento avanza.
 #En la visualización, podemos ver cómo los nodos de la misma clase son agrupados en regiones distintas del espacio de 2 dimensiones.
 #Esto es un indicativo de que el modelo está aprendiendo a representar los nodos de acuerdo a su clase. 
 #Además, podemos ver cómo la pérdida disminuye a medida que el entrenamiento avanza.
 #En este caso, la representación previa es muy parecida a la que se obtiene al final del entrenamiento. 
 #Esto es un indicativo de que el modelo ha convergido a una solución estable.
+
