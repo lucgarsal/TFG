@@ -75,7 +75,7 @@ class MLP(torch.nn.Module):
 
 model_feature = MLP(hidden_channels=16)
 out = model_feature(data.x)
-visualize(out, color=data.y, filename='CoraUntrained_features.png')
+visualize(out, color=data.y, filename='CoraUntrained_features.png') #Será similar a todas las imágenes de pre-entrenamiento
 criterion = torch.nn.CrossEntropyLoss()  # Define loss criterion.
 optimizer = torch.optim.Adam(model_feature.parameters(), lr=0.01, weight_decay=5e-4)  # Define optimizer.
 
@@ -105,8 +105,7 @@ test_acc = test()
 print(f'Test Accuracy: {test_acc:.4f}')
 
 model_feature.eval()
-#TODO
-out = model_feature(data.x, data.edge_index)
+out = model_feature(data.x)
 visualize(out, color=data.y, filename='CoraTrained_feature.png')
 
 
