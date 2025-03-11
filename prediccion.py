@@ -20,7 +20,7 @@ data = dataset[0]
 #es importante tener en cuenta los siguientes aspectos:
 
 # Quitamos los nodos aislados
-# data.x, data.edge_index, data.y, mask = remove_isolated_nodes(data.x, data.edge_index, data.y)
+#data.x, data.edge_index, data.y, mask = remove_isolated_nodes(data.x, data.edge_index, data.y)
 
 # La normalización se realiza automáticamente con el transform=NormalizeFeatures() al cargar el dataset
 # Si las características numéricas tuviesen rangos muy distintos, también podemos normalizarlas usando un escalador
@@ -33,7 +33,7 @@ data.x = torch.tensor(scaler.fit_transform(data.x.numpy()), dtype=torch.float32)
 #data.edge_index = to_undirected(data.edge_index)
 
 #Si x tiene muchas dimensiones, podemos aplicar PCA o t-SNE.
-""""
+"""
 pca = PCA(n_components=100)  # Reducimos a 100 dimensiones
 data.x = torch.tensor(pca.fit_transform(data.x.numpy()), dtype=torch.float32)
 """
@@ -117,13 +117,21 @@ print(f'No es dirigido: {data.is_undirected()}')
 # Para ello, creamos una red neuronal que recibe como entrada las características de dos nodos y predice si existe un enlace entre ellos.
 
 class LinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, layer_sizes):
         super(LinkPredictor, self).__init__()
-        self.lin = torch.nn.Linear(in_channels * 2, 1)
+        if isinstance(layer_sizes, int):
+            raise TypeError("layer_sizes debe ser una lista de enteros.")
+        layers = []
+        for i in range(len(layer_sizes) - 1):#corrigeme un error en esta linea de tipo int has no len
+
+            layers.append(torch.nn.Linear(layer_sizes[i], layer_sizes[i + 1]))
+            layers.append(torch.nn.ReLU())
+        layers.append(torch.nn.Linear(layer_sizes[-1], 1))
+        self.net = torch.nn.Sequential(*layers)
 
     def forward(self, x_i, x_j):
         x = torch.cat([x_i, x_j], dim=-1)
-        return torch.sigmoid(self.lin(x))
+        return torch.sigmoid(self.net(x))
 
 def train_link_predictor(data, model, optimizer, device, epochs=100):
     model.train()
@@ -162,7 +170,9 @@ def predict_links(data, model, device, threshold=0.5):
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = LinkPredictor(data.num_node_features).to(device)
+layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
+#Habia un problema porque data.num_node_features es un tensor y no un entero
+model = LinkPredictor(layer_sizes).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 train_link_predictor(data, model, optimizer, device, epochs=100)
