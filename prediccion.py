@@ -11,16 +11,15 @@ from torch_geometric.utils import remove_isolated_nodes
 from sklearn.preprocessing import StandardScaler
 from torch_geometric.utils import to_undirected
 from sklearn.decomposition import PCA
+from torch_geometric.nn import GCNConv
 
-#dataset = Planetoid(root='/tmp/Cora', name='Cora')
+# Cargar el dataset
 dataset = Planetoid(root='/tmp/Pubmed', name='Pubmed')
 data = dataset[0]
 
-#En primer lugar, realizo un preprocesado básico de los datos. Aunque la mayoría de los datasets de Pytorch Geometric ya vienen preprocesados, 
-#es importante tener en cuenta los siguientes aspectos:
-
+# Preprocesado básico de los datos
 # Quitamos los nodos aislados
-#data.x, data.edge_index, data.y, mask = remove_isolated_nodes(data.x, data.edge_index, data.y)
+# data.x, data.edge_index, data.y, mask = remove_isolated_nodes(data.x, data.edge_index, data.y)
 
 # La normalización se realiza automáticamente con el transform=NormalizeFeatures() al cargar el dataset
 # Si las características numéricas tuviesen rangos muy distintos, también podemos normalizarlas usando un escalador
@@ -30,9 +29,9 @@ data.x = torch.tensor(scaler.fit_transform(data.x.numpy()), dtype=torch.float32)
 """
 
 # Si queremos trabajar con un grafo no dirigido, duplicamos las aristas.
-#data.edge_index = to_undirected(data.edge_index)
+# data.edge_index = to_undirected(data.edge_index)
 
-#Si x tiene muchas dimensiones, podemos aplicar PCA o t-SNE.
+# Si x tiene muchas dimensiones, podemos aplicar PCA o t-SNE.
 """
 pca = PCA(n_components=100)  # Reducimos a 100 dimensiones
 data.x = torch.tensor(pca.fit_transform(data.x.numpy()), dtype=torch.float32)
@@ -43,29 +42,6 @@ data.x = torch.tensor(pca.fit_transform(data.x.numpy()), dtype=torch.float32)
 train_mask = data.train_mask
 val_mask = data.val_mask
 test_mask = data.test_mask
-
-# Creación de Máscaras
-# Las máscaras ya están creadas en los datasets de Planetoid, pero si estuvieramos trabajando con un dataset diferente, las crearíamos así:
-""""
-def create_masks(data, num_train, num_val, num_test):
-    num_nodes = data.num_nodes
-    indices = torch.randperm(num_nodes)
-    train_mask = torch.zeros(num_nodes, dtype=torch.bool)
-    val_mask = torch.zeros(num_nodes, dtype=torch.bool)
-    test_mask = torch.zeros(num_nodes, dtype=torch.bool)
-
-    train_mask[indices[:num_train]] = True
-    val_mask[indices[num_train:num_train + num_val]] = True
-    test_mask[indices[num_train + num_val:num_train + num_val + num_test]] = True
-
-    return train_mask, val_mask, test_mask
-
-# Ejemplo de uso:
-num_train = 140
-num_val = 500
-num_test = 1000
-train_mask, val_mask, test_mask = create_masks(data, num_train, num_val, num_test)
-"""
 
 # Asignar las máscaras al objeto data
 data.train_mask = train_mask
@@ -98,9 +74,7 @@ def visualize(h, color, filename, pos_edge_index=None, neg_edge_index=None):
     plt.savefig(f'images/{filename}')
     plt.show()
 
-
-# Como podemos observar por pantalla, obtenemos diversas características del conjunto de datos Cora.
-
+# Mostrar características del conjunto de datos
 print(f'Número de nodos: {data.num_nodes}')
 print(f'Número de features por nodo: {data.num_node_features}')
 print(f'Número de clases: {dataset.num_classes}')
@@ -108,13 +82,65 @@ print(f'Número de enlaces: {data.num_edges}')
 print(f'Grado medio de los nodos: {data.num_edges / data.num_nodes:.2f}')
 print(f'Número de nodos de entrenamiento: {data.train_mask.sum()}')
 print(f'Número de nodos de validación: {data.val_mask.sum()}')
-print(f'Número de nodos de tests: {data.test_mask.sum()}')
+print(f'Número de nodos de prueba: {data.test_mask.sum()}')
 print(f'Contiene nodos aislados: {data.has_isolated_nodes()}')
 print(f'Contiene bucles: {data.has_self_loops()}')
 print(f'No es dirigido: {data.is_undirected()}')
 
-# En primer lugar, realizamos una función para predicción de enlaces basándonos únicamente en las características de los nodos.
-# Para ello, creamos una red neuronal que recibe como entrada las características de dos nodos y predice si existe un enlace entre ellos.
+# Definimos el modelo GCN para calcular los embeddings del grafo
+class GCN(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(GCN, self).__init__()
+        self.conv1 = GCNConv(in_channels, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, out_channels)
+
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = self.conv2(x, edge_index)
+        return x
+
+def train_gcn(data, model, optimizer, device, epochs=100):
+    model.train()
+    data = data.to(device)
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        out = model(data.x, data.edge_index)
+        loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
+        loss.backward()
+        optimizer.step()
+        if epoch % 10 == 0:
+            print(f'Epoch {epoch}, Loss: {loss.item()}')
+    return model
+
+# Inicializamos el modelo GCN y el optimizador
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+gcn_model = GCN(data.num_node_features, 64, 16).to(device)
+gcn_optimizer = torch.optim.Adam(gcn_model.parameters(), lr=0.01)
+
+# Entrena el modelo GCN
+gcn_model = train_gcn(data, gcn_model, gcn_optimizer, device, epochs=100)
+
+# Obtén los embeddings del grafo
+data.embeddings = gcn_model(data.x, data.edge_index).detach()
+
+# Definimos el modelo para la predicción de enlaces. En primer lugar definimos un bloque residual para las capas. Esto sirve
+# para que el modelo pueda aprender representaciones no lineales de los nodos.
+class ResidualBlock(torch.nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(ResidualBlock, self).__init__()
+        self.linear = torch.nn.Linear(in_channels, out_channels)
+        self.relu = torch.nn.ReLU()
+        self.adjust = None
+        if in_channels != out_channels:
+            self.adjust = torch.nn.Linear(in_channels, out_channels)
+
+    def forward(self, x):
+        residual = x
+        out = self.linear(x)
+        if self.adjust is not None:
+            residual = self.adjust(residual)
+        return self.relu(out + residual)
 
 class LinkPredictor(torch.nn.Module):
     def __init__(self, layer_sizes):
@@ -122,10 +148,8 @@ class LinkPredictor(torch.nn.Module):
         if isinstance(layer_sizes, int):
             raise TypeError("layer_sizes debe ser una lista de enteros.")
         layers = []
-        for i in range(len(layer_sizes) - 1):#corrigeme un error en esta linea de tipo int has no len
-
-            layers.append(torch.nn.Linear(layer_sizes[i], layer_sizes[i + 1]))
-            layers.append(torch.nn.ReLU())
+        for i in range(len(layer_sizes) - 1):
+            layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
         layers.append(torch.nn.Linear(layer_sizes[-1], 1))
         self.net = torch.nn.Sequential(*layers)
 
@@ -133,7 +157,7 @@ class LinkPredictor(torch.nn.Module):
         x = torch.cat([x_i, x_j], dim=-1)
         return torch.sigmoid(self.net(x))
 
-def train_link_predictor(data, model, optimizer, device, epochs=100):
+def train_link_predictor(data, model, optimizer, device, use_embeddings=False, epochs=100):
     model.train()
     data = data.to(device)
     for epoch in range(epochs):
@@ -141,8 +165,12 @@ def train_link_predictor(data, model, optimizer, device, epochs=100):
         pos_edge_index = data.edge_index
         neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1))
         
-        pos_out = model(data.x[pos_edge_index[0]], data.x[pos_edge_index[1]])
-        neg_out = model(data.x[neg_edge_index[0]], data.x[neg_edge_index[1]])
+        if use_embeddings:
+            pos_out = model(data.embeddings[pos_edge_index[0]], data.embeddings[pos_edge_index[1]])
+            neg_out = model(data.embeddings[neg_edge_index[0]], data.embeddings[neg_edge_index[1]])
+        else:
+            pos_out = model(data.x[pos_edge_index[0]], data.x[pos_edge_index[1]])
+            neg_out = model(data.x[neg_edge_index[0]], data.x[neg_edge_index[1]])
         
         pos_loss = F.binary_cross_entropy(pos_out, torch.ones_like(pos_out))
         neg_loss = F.binary_cross_entropy(neg_out, torch.zeros_like(neg_out))
@@ -154,40 +182,42 @@ def train_link_predictor(data, model, optimizer, device, epochs=100):
         if epoch % 10 == 0:
             print(f'Epoch {epoch}, Loss: {loss.item()}')
 
-def predict_links(data, model, device, threshold=0.5):
+def predict_links(data, model, device, use_embeddings=False, threshold=0.5):
     model.eval()
     data = data.to(device)
     pos_edge_index = data.edge_index
     neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1))
     
-    pos_out = model(data.x[pos_edge_index[0]], data.x[pos_edge_index[1]])
-    neg_out = model(data.x[neg_edge_index[0]], data.x[neg_edge_index[1]])
+    if use_embeddings:
+        pos_out = model(data.embeddings[pos_edge_index[0]], data.embeddings[pos_edge_index[1]])
+        neg_out = model(data.embeddings[neg_edge_index[0]], data.embeddings[neg_edge_index[1]])
+    else:
+        pos_out = model(data.x[pos_edge_index[0]], data.x[pos_edge_index[1]])
+        neg_out = model(data.x[neg_edge_index[0]], data.x[neg_edge_index[1]])
     
     pos_pred = (pos_out > threshold).cpu().numpy()
     neg_pred = (neg_out > threshold).cpu().numpy()
     
     return pos_pred, neg_pred, pos_edge_index, neg_edge_index
 
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Inicializamos el modelo de predicción de enlaces y el optimizador
 layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
 #Habia un problema porque data.num_node_features es un tensor y no un entero
 model = LinkPredictor(layer_sizes).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
-train_link_predictor(data, model, optimizer, device, epochs=100)
-pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device)
+use_embeddings = True  # Cambiar a False para usar características de los nodos
+
+train_link_predictor(data, model, optimizer, device, use_embeddings=use_embeddings, epochs=100)
+pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, use_embeddings=use_embeddings)
 
 print(f'Positive link predictions: {pos_pred}')
 print(f'Negative link predictions: {neg_pred}')
 
 def evaluate_model(pos_pred, neg_pred):
-    # Crear etiquetas verdaderas
     y_true = [1] * len(pos_pred) + [0] * len(neg_pred)
-    # Concatenar predicciones positivas y negativas
     y_pred = list(pos_pred) + list(neg_pred)
     
-    # Calcular métricas
     accuracy = accuracy_score(y_true, y_pred)
     precision = precision_score(y_true, y_pred)
     recall = recall_score(y_true, y_pred)
@@ -202,5 +232,5 @@ def evaluate_model(pos_pred, neg_pred):
 
 evaluate_model(pos_pred, neg_pred)
 
-#Llamar a la función de visualización solo cuando tengamos un subgrafo o un dataset pequeño
-#visualize(data.x, color=data.y, filename='link_predictions.png', pos_edge_index=pos_edge_index, neg_edge_index=neg_edge_index)
+# Llamar a la función de visualización solo cuando tengamos un subgrafo o un dataset pequeño
+# visualize(data.x, color=data.y, filename='link_predictions.png', pos_edge_index=pos_edge_index, neg_edge_index=neg_edge_index)
