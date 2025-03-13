@@ -200,6 +200,35 @@ def predict_links(data, model, device, use_embeddings=False, threshold=0.5):
     
     return pos_pred, neg_pred, pos_edge_index, neg_edge_index
 
+
+# Definimos la nueva clase NodeFeatureConcatenator
+# La primera capa será de cálculo de la concatenación y las siguientes serán igual que antes con la lista de capas y bloques residuales
+class NodeFeatureConcatenator(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(NodeFeatureConcatenator, self).__init__()
+        self.concat_layer = torch.nn.Linear(in_channels * 2, hidden_channels)
+        layers = []
+        layer_sizes = [hidden_channels, out_channels]
+        for i in range(len(layer_sizes) - 1):
+            layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
+        layers.append(torch.nn.Linear(layer_sizes[-1], 1))
+        self.net = torch.nn.Sequential(*layers)
+
+    def forward(self, x_i, x_j):
+        x = torch.cat([x_i, x_j], dim=-1)
+        x = F.relu(self.concat_layer(x))
+        return torch.sigmoid(self.net(x))
+    
+# Inicializamos el modelo de concatenación de características de nodos y el optimizador
+concat_layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
+concat_model = NodeFeatureConcatenator(data.num_node_features, concat_layer_sizes[1], concat_layer_sizes[-1]).to(device)
+concat_optimizer = torch.optim.Adam(concat_model.parameters(), lr=0.01)
+
+# Entrenar el modelo de concatenación de características de nodos
+train_link_predictor(data, concat_model, concat_optimizer, device, use_embeddings=False, epochs=100)
+pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, concat_model, device, use_embeddings=False)
+
+
 # Inicializamos el modelo de predicción de enlaces y el optimizador
 layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
 #Habia un problema porque data.num_node_features es un tensor y no un entero
