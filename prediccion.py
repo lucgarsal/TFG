@@ -11,7 +11,7 @@ from torch_geometric.utils import remove_isolated_nodes
 from sklearn.preprocessing import StandardScaler
 from torch_geometric.utils import to_undirected
 from sklearn.decomposition import PCA
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GCNConv, GATConv
 
 # Cargar el dataset
 dataset = Planetoid(root='/tmp/Pubmed', name='Pubmed')
@@ -113,7 +113,8 @@ def train_gcn(data, model, optimizer, device, epochs=100):
             print(f'Epoch {epoch}, Loss: {loss.item()}')
     return model
 
-# Inicializamos el modelo GCN y el optimizador
+# Inicializamos el modelo GCN y el optimizador. La generación de los embeddings se realizará una vez por dataset
+"""
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 gcn_model = GCN(data.num_node_features, 64, 16).to(device)
 gcn_optimizer = torch.optim.Adam(gcn_model.parameters(), lr=0.01)
@@ -123,9 +124,28 @@ gcn_model = train_gcn(data, gcn_model, gcn_optimizer, device, epochs=100)
 
 # Obtén los embeddings del grafo
 data.embeddings = gcn_model(data.x, data.edge_index).detach()
+"""
+# Visualización de los embeddings del grafo y las predicciones de enlaces
+def visualize_embeddings(data, pos_edge_index, neg_edge_index, filename):
+    embeddings = data.embeddings.cpu().numpy()
+    z = TSNE(n_components=2).fit_transform(embeddings)
+
+    plt.figure(figsize=(10, 10))
+    plt.scatter(z[:, 0], z[:, 1], s=70, c=data.y.cpu(), cmap="Set2", alpha=0.5)
+    
+    for i, j in pos_edge_index.t().cpu().numpy():
+        plt.plot([z[i, 0], z[j, 0]], [z[i, 1], z[j, 1]], color='green', alpha=0.5)
+    for i, j in neg_edge_index.t().cpu().numpy():
+        plt.plot([z[i, 0], z[j, 0]], [z[i, 1], z[j, 1]], color='red', alpha=0.5)
+
+    if not os.path.exists('images'):
+        os.makedirs('images')
+    plt.savefig(f'images/{filename}')
+    plt.show()
+
 
 # Definimos el modelo para la predicción de enlaces. En primer lugar definimos un bloque residual para las capas. Esto sirve
-# para que el modelo pueda aprender representaciones no lineales de los nodos.
+# para que no se pierda información en las capas intermedias.
 class ResidualBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
         super(ResidualBlock, self).__init__()
@@ -142,6 +162,7 @@ class ResidualBlock(torch.nn.Module):
             residual = self.adjust(residual)
         return self.relu(out + residual)
 
+
 class LinkPredictor(torch.nn.Module):
     def __init__(self, layer_sizes):
         super(LinkPredictor, self).__init__()
@@ -157,6 +178,104 @@ class LinkPredictor(torch.nn.Module):
         x = torch.cat([x_i, x_j], dim=-1)
         return torch.sigmoid(self.net(x))
 
+# Definimos la nueva clase NodeFeatureConcatenator
+# La primera capa será de cálculo de la concatenación y las siguientes serán igual que antes con la lista de capas y bloques residuales
+class NodeFeatureConcatenator(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(NodeFeatureConcatenator, self).__init__()
+        self.concat_layer = torch.nn.Linear(in_channels * 2, hidden_channels)
+        layers = []
+        layer_sizes = [hidden_channels, out_channels]
+        for i in range(len(layer_sizes) - 1):
+            layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
+        layers.append(torch.nn.Linear(layer_sizes[-1], 1))
+        self.net = torch.nn.Sequential(*layers)
+
+    def forward(self, x_i, x_j):
+        x = torch.cat([x_i, x_j], dim=-1)
+        print(f"Concatenated features shape: {x.shape}")
+        x = F.relu(self.concat_layer(x))
+        print(f"After concatenation layer shape: {x.shape}")
+        return torch.sigmoid(self.net(x))
+    
+
+# Llamar a la función de visualización solo cuando tengamos un subgrafo o un dataset pequeño
+# visualize(data.x, color=data.y, filename='link_predictions.png', pos_edge_index=pos_edge_index, neg_edge_index=neg_edge_index)
+
+# Tras realizar la predicción usando dos clases de MLP, creamos clases nuevas que usarán métodos de GNN:
+
+#NOTA: las voy a hacer con 2-3 capas convolucionales, preguntar si añado la lista de capas y bloques residuales
+
+# GCNLinkPredictor
+class GCNLinkPredictor(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(GCNLinkPredictor, self).__init__()
+        self.conv1= GCNConv(in_channels, hidden_channels)
+        self.conv2= GCNConv(hidden_channels, out_channels)
+        self.conv3= GCNConv(out_channels, 1)
+
+        def forward(self, x_i, x_j, edge_index):
+            x = torch.cat([x_i, x_j], dim=-1) 
+            x = self.conv1(x, edge_index)
+            x = F.relu()
+            x = self.conv2(x, edge_index)
+            x = F.relu()
+            x = self.conv3 (x, edge_index)
+            return torch.sigmoid(x)
+        
+# GATLinkPredictor
+class GATLinkPredictor(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(GATLinkPredictor, self).__init__()
+        self.conv1 = GATConv(in_channels, hidden_channels)
+        self.conv2 = GATConv(hidden_channels, out_channels)
+        self.conv3 = GATConv(out_channels, 1)
+
+        def forward(self, x_i, x_j, edge_index):
+            x = torch.cat([x_i, x_j], dim=-1)
+            x = self.conv1(x, edge_index)
+            x = F.relu()
+            x = self.conv2(x, edge_index)
+            x = F.relu()
+            x = self.conv3(x, edge_index)
+            return torch.sigmoid(x)
+
+# GATSAGELinkPredictor
+class GATSAGELinkPredictor(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(GATSAGELinkPredictor, self).__init__()
+        self.conv1 = GATConv(in_channels, hidden_channels)
+        self.conv2 = GATConv(hidden_channels, out_channels)
+        self.conv3 = GATConv(out_channels, 1)
+
+        def forward(self, x_i, x_j, edge_index):
+            x = torch.cat([x_i, x_j], dim=-1)
+            x = self.conv1(x, edge_index)
+            x = F.relu()
+            x = self.conv2(x, edge_index)
+            x = F.relu()
+            x = self.conv3(x, edge_index)
+            return torch.sigmoid(x)
+        
+# VGAELinkPredictor
+class VGAELinkPredictor(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(VGAELinkPredictor, self).__init__()
+        self.conv1 = GCNConv(in_channels, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, out_channels)
+        self.conv3 = GCNConv(out_channels, 1)
+
+        def forward(self, x_i, x_j, edge_index):
+            x = torch.cat([x_i, x_j], dim=-1)
+            x = self.conv1(x, edge_index)
+            x = F.relu()
+            x = self.conv2(x, edge_index)
+            x = F.relu()
+            x = self.conv3(x, edge_index)
+            return torch.sigmoid(x)
+
+
+# Entrenamiento y predicción de enlaces
 def train_link_predictor(data, model, optimizer, device, use_embeddings=False, epochs=100):
     model.train()
     data = data.to(device)
@@ -201,35 +320,10 @@ def predict_links(data, model, device, use_embeddings=False, threshold=0.5):
     return pos_pred, neg_pred, pos_edge_index, neg_edge_index
 
 
-# Definimos la nueva clase NodeFeatureConcatenator
-# La primera capa será de cálculo de la concatenación y las siguientes serán igual que antes con la lista de capas y bloques residuales
-class NodeFeatureConcatenator(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
-        super(NodeFeatureConcatenator, self).__init__()
-        self.concat_layer = torch.nn.Linear(in_channels * 2, hidden_channels)
-        layers = []
-        layer_sizes = [hidden_channels, out_channels]
-        for i in range(len(layer_sizes) - 1):
-            layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
-        layers.append(torch.nn.Linear(layer_sizes[-1], 1))
-        self.net = torch.nn.Sequential(*layers)
-
-    def forward(self, x_i, x_j):
-        x = torch.cat([x_i, x_j], dim=-1)
-        x = F.relu(self.concat_layer(x))
-        return torch.sigmoid(self.net(x))
-    
-# Inicializamos el modelo de concatenación de características de nodos y el optimizador
-concat_layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
-concat_model = NodeFeatureConcatenator(data.num_node_features, concat_layer_sizes[1], concat_layer_sizes[-1]).to(device)
-concat_optimizer = torch.optim.Adam(concat_model.parameters(), lr=0.01)
-
-# Entrenar el modelo de concatenación de características de nodos
-train_link_predictor(data, concat_model, concat_optimizer, device, use_embeddings=False, epochs=100)
-pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, concat_model, device, use_embeddings=False)
-
+# NOTA: Descomentar el código para ejecutarlo con el modelo que vayamos a entrenar. ¿Se pueden entrenar simultáneamente?
 
 # Inicializamos el modelo de predicción de enlaces y el optimizador
+"""
 layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
 #Habia un problema porque data.num_node_features es un tensor y no un entero
 model = LinkPredictor(layer_sizes).to(device)
@@ -239,6 +333,17 @@ use_embeddings = True  # Cambiar a False para usar características de los nodos
 
 train_link_predictor(data, model, optimizer, device, use_embeddings=use_embeddings, epochs=100)
 pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, use_embeddings=use_embeddings)
+"""
+# Inicializamos el modelo de concatenación de características de nodos y el optimizador
+"""
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+concat_layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
+concat_model = NodeFeatureConcatenator(data.num_node_features, concat_layer_sizes[1], concat_layer_sizes[-1]).to(device)
+concat_optimizer = torch.optim.Adam(concat_model.parameters(), lr=0.01)
+
+train_link_predictor(data, concat_model, concat_optimizer, device, use_embeddings=False, epochs=100)
+pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, concat_model, device, use_embeddings=False)
+"""
 
 print(f'Positive link predictions: {pos_pred}')
 print(f'Negative link predictions: {neg_pred}')
@@ -261,5 +366,5 @@ def evaluate_model(pos_pred, neg_pred):
 
 evaluate_model(pos_pred, neg_pred)
 
-# Llamar a la función de visualización solo cuando tengamos un subgrafo o un dataset pequeño
-# visualize(data.x, color=data.y, filename='link_predictions.png', pos_edge_index=pos_edge_index, neg_edge_index=neg_edge_index)
+# Llamar a la función de visualización de embeddings cuando trabajemos con ellos. 
+visualize_embeddings(data, pos_edge_index, neg_edge_index, 'link_predictions.png')
