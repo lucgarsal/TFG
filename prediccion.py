@@ -178,25 +178,43 @@ class LinkPredictor(torch.nn.Module):
         x = torch.cat([x_i, x_j], dim=-1)
         return torch.sigmoid(self.net(x))
 
-# Definimos la nueva clase NodeFeatureConcatenator
-# La primera capa será de cálculo de la concatenación y las siguientes serán igual que antes con la lista de capas y bloques residuales
-class NodeFeatureConcatenator(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
-        super(NodeFeatureConcatenator, self).__init__()
+
+class GraphConcatenationNetwork(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, layer_sizes, edge_index):
+        super(GraphConcatenationNetwork, self).__init__()
+        self.edge_index = edge_index
         self.concat_layer = torch.nn.Linear(in_channels * 2, hidden_channels)
+        if isinstance(layer_sizes, int):
+            raise TypeError("layer_sizes debe ser una lista de enteros.")
         layers = []
-        layer_sizes = [hidden_channels, out_channels]
         for i in range(len(layer_sizes) - 1):
             layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
         layers.append(torch.nn.Linear(layer_sizes[-1], 1))
         self.net = torch.nn.Sequential(*layers)
 
-    def forward(self, x_i, x_j):
+    def forward(self, x, edge_index):
+        # Concatenamos las características de los nodos conectados por las aristas
+        row, col = edge_index
+        x_i = x[row]
+        x_j = x[col]
         x = torch.cat([x_i, x_j], dim=-1)
-        print(f"Concatenated features shape: {x.shape}")
+        
+        # Aplicamos la capa de concatenación
         x = F.relu(self.concat_layer(x))
-        print(f"After concatenation layer shape: {x.shape}")
+
         return torch.sigmoid(self.net(x))
+
+graph = data
+edge_list = graph.edge_index
+# Seleccionamos aleatoriamente algunas aristas del edge_index
+num_edges = edge_list.size(1)
+num_sampled_edges = int(0.5 * num_edges)  # Por ejemplo, selecciona el 50% de las aristas
+sampled_indices = torch.randperm(num_edges)[:num_sampled_edges]
+sampled_edge_index = edge_list[:, sampled_indices]
+
+layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
+model = GraphConcatenationNetwork(in_channels=graph.num_node_features, hidden_channels=64, layer_sizes=layer_sizes, edge_index=sampled_edge_index)
+output = model(graph.x, sampled_edge_index)
     
 
 # Llamar a la función de visualización solo cuando tengamos un subgrafo o un dataset pequeño
@@ -277,6 +295,18 @@ class VGAELinkPredictor(torch.nn.Module):
 
 # Entrenamiento y predicción de enlaces
 def train_link_predictor(data, model, optimizer, device, use_embeddings=False, epochs=100):
+    """
+    Trains a link prediction model.
+    Args:
+        data (torch_geometric.data.Data): The input data containing node features and edge indices.
+        model (torch.nn.Module): The link prediction model to be trained.
+        optimizer (torch.optim.Optimizer): The optimizer used for training the model.
+        device (torch.device): The device (CPU or GPU) on which to perform training.
+        use_embeddings (bool, optional): If True, use node embeddings for training. If False, use node features. Default is False.
+        epochs (int, optional): The number of training epochs. Default is 100.
+    Returns:
+        None
+    """
     model.train()
     data = data.to(device)
     for epoch in range(epochs):
