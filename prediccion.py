@@ -13,11 +13,17 @@ from torch_geometric.utils import to_undirected
 from sklearn.decomposition import PCA
 from torch_geometric.nn import GCNConv, GATConv
 
+import pykeen
+from pykeen.pipeline import pipeline
+from pykeen.triples import TriplesFactory
+import numpy as np
+
 # Cargar el dataset
 dataset = Planetoid(root='/tmp/Pubmed', name='Pubmed')
 data = dataset[0]
 
 # Preprocesado básico de los datos
+
 # Quitamos los nodos aislados
 # data.x, data.edge_index, data.y, mask = remove_isolated_nodes(data.x, data.edge_index, data.y)
 
@@ -87,63 +93,98 @@ print(f'Contiene nodos aislados: {data.has_isolated_nodes()}')
 print(f'Contiene bucles: {data.has_self_loops()}')
 print(f'No es dirigido: {data.is_undirected()}')
 
-# Definimos el modelo GCN para calcular los embeddings del grafo
-class GCN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(in_channels, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, out_channels)
+#Generación del embedding usando pykeen. El problema es que tenemos que cambiar nuestro grafo
+#al formato de tripletas con el que trabaja pykeen
+"""
+sources = data.edge_index[0].tolist()
+targets = data.edge_index[1].tolist()
+relations = ["linked_to"]*len(sources)
 
-    def forward(self, x, edge_index):
+# Convertir a formato de PyKEEN
+triples_array = np.array([(str(s), r, str(t)) for s, r, t in zip(sources, relations, targets)])
+tf = TriplesFactory.from_labeled_triples(triples_array)
+
+# Entrenar un modelo de embeddings en PyKEEN
+result = pipeline(
+    training=tf,
+    model="TransE",
+    training_kwargs={"num_epochs": 100}, 
+)
+
+# Obtenemos embeddings de nodos
+embedding_model = result.model
+node_embeddings = embedding_model.entity_representations[0]  # Representaciones de nodos
+data.embeddings = node_embeddings
+"""
+# GCNLinkPredictor
+class GCNLinkPredictor(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(GCNLinkPredictor, self).__init__()
+        self.conv1 = GCNConv(in_channels, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, hidden_channels)
+        self.conv3 = GCNConv(hidden_channels, out_channels)
+
+    def forward(self, x_i, x_j, edge_index):
+        x = torch.cat([x_i, x_j], dim=-1)
         x = self.conv1(x, edge_index)
         x = F.relu(x)
         x = self.conv2(x, edge_index)
-        return x
+        x = F.relu(x)
+        x = self.conv3(x, edge_index)
+        return torch.sigmoid(x)
 
-def train_gcn(data, model, optimizer, device, epochs=100):
-    model.train()
-    data = data.to(device)
-    for epoch in range(epochs):
-        optimizer.zero_grad()
-        out = model(data.x, data.edge_index)
-        loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
-        loss.backward()
-        optimizer.step()
-        if epoch % 10 == 0:
-            print(f'Epoch {epoch}, Loss: {loss.item()}')
-    return model
+# GATLinkPredictor
+class GATLinkPredictor(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(GATLinkPredictor, self).__init__()
+        self.conv1 = GATConv(in_channels, hidden_channels)
+        self.conv2 = GATConv(hidden_channels, hidden_channels)
+        self.conv3 = GATConv(hidden_channels, out_channels)
 
-# Inicializamos el modelo GCN y el optimizador. La generación de los embeddings se realizará una vez por dataset
-"""
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-gcn_model = GCN(data.num_node_features, 64, 16).to(device)
-gcn_optimizer = torch.optim.Adam(gcn_model.parameters(), lr=0.01)
+    def forward(self, x_i, x_j, edge_index):
+        x = torch.cat([x_i, x_j], dim=-1)
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        x = self.conv3(x, edge_index)
+        return torch.sigmoid(x)
 
-# Entrena el modelo GCN
-gcn_model = train_gcn(data, gcn_model, gcn_optimizer, device, epochs=100)
+# GATSAGELinkPredictor
+class GATSAGELinkPredictor(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(GATSAGELinkPredictor, self).__init__()
+        self.conv1 = GATConv(in_channels, hidden_channels)
+        self.conv2 = GATConv(hidden_channels, out_channels)
+        self.conv3 = GATConv(out_channels, 1)
 
-# Obtén los embeddings del grafo
-data.embeddings = gcn_model(data.x, data.edge_index).detach()
-"""
-# Visualización de los embeddings del grafo y las predicciones de enlaces
-def visualize_embeddings(data, pos_edge_index, neg_edge_index, filename):
-    embeddings = data.embeddings.cpu().numpy()
-    z = TSNE(n_components=2).fit_transform(embeddings)
+    def forward(self, x_i, x_j, edge_index):
+        x = torch.cat([x_i, x_j], dim=-1)
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        x = self.conv3(x, edge_index)
+        return torch.sigmoid(x)
 
-    plt.figure(figsize=(10, 10))
-    plt.scatter(z[:, 0], z[:, 1], s=70, c=data.y.cpu(), cmap="Set2", alpha=0.5)
+# VGAELinkPredictor
+class VGAELinkPredictor(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels):
+        super(VGAELinkPredictor, self).__init__()
+        self.conv1 = GCNConv(in_channels, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, out_channels)
+        self.conv3 = GCNConv(out_channels, 1)
+
+    def forward(self, x_i, x_j, edge_index):
+        x = torch.cat([x_i, x_j], dim=-1)
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = self.conv2(x, edge_index)
+        x = F.relu(x)
+        x = self.conv3(x, edge_index)
+        return torch.sigmoid(x)
+
     
-    for i, j in pos_edge_index.t().cpu().numpy():
-        plt.plot([z[i, 0], z[j, 0]], [z[i, 1], z[j, 1]], color='green', alpha=0.5)
-    for i, j in neg_edge_index.t().cpu().numpy():
-        plt.plot([z[i, 0], z[j, 0]], [z[i, 1], z[j, 1]], color='red', alpha=0.5)
-
-    if not os.path.exists('images'):
-        os.makedirs('images')
-    plt.savefig(f'images/{filename}')
-    plt.show()
-
-
 # Definimos el modelo para la predicción de enlaces. En primer lugar definimos un bloque residual para las capas. Esto sirve
 # para que no se pierda información en las capas intermedias.
 class ResidualBlock(torch.nn.Module):
@@ -164,8 +205,9 @@ class ResidualBlock(torch.nn.Module):
 
 
 class LinkPredictor(torch.nn.Module):
-    def __init__(self, layer_sizes):
+    def __init__(self, in_channels, hidden_channels, layer_sizes, predictor_type):
         super(LinkPredictor, self).__init__()
+        self.concat_layer = torch.nn.Linear(in_channels * 2, hidden_channels)
         if isinstance(layer_sizes, int):
             raise TypeError("layer_sizes debe ser una lista de enteros.")
         layers = []
@@ -174,8 +216,20 @@ class LinkPredictor(torch.nn.Module):
         layers.append(torch.nn.Linear(layer_sizes[-1], 1))
         self.net = torch.nn.Sequential(*layers)
 
+        if predictor_type == 'GCN':
+            self.link_predictor = GCNLinkPredictor(in_channels, hidden_channels, layer_sizes[-1])
+        elif predictor_type == 'GAT':
+            self.link_predictor = GATLinkPredictor(in_channels, hidden_channels, layer_sizes[-1])
+        elif predictor_type == 'GATSAGE':
+            self.link_predictor = GATSAGELinkPredictor(in_channels, hidden_channels, layer_sizes[-1])
+        elif predictor_type == 'VGAE':
+            self.link_predictor = VGAELinkPredictor(in_channels, hidden_channels, layer_sizes[-1])
+        else:
+            raise ValueError(f"Unknown predictor type: {predictor_type}")
+
     def forward(self, x_i, x_j):
         x = torch.cat([x_i, x_j], dim=-1)
+        x = F.relu(self.concat_layer(x))
         return torch.sigmoid(self.net(x))
 
 
@@ -203,7 +257,7 @@ class GraphConcatenationNetwork(torch.nn.Module):
         x = F.relu(self.concat_layer(x))
 
         return torch.sigmoid(self.net(x))
-
+"""
 graph = data
 edge_list = graph.edge_index
 # Seleccionamos aleatoriamente algunas aristas del edge_index
@@ -215,86 +269,13 @@ sampled_edge_index = edge_list[:, sampled_indices]
 layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
 model = GraphConcatenationNetwork(in_channels=graph.num_node_features, hidden_channels=64, layer_sizes=layer_sizes, edge_index=sampled_edge_index)
 output = model(graph.x, sampled_edge_index)
-    
+"""  
 
 # Llamar a la función de visualización solo cuando tengamos un subgrafo o un dataset pequeño
 # visualize(data.x, color=data.y, filename='link_predictions.png', pos_edge_index=pos_edge_index, neg_edge_index=neg_edge_index)
 
-# Tras realizar la predicción usando dos clases de MLP, creamos clases nuevas que usarán métodos de GNN:
-
-#NOTA: las voy a hacer con 2-3 capas convolucionales, preguntar si añado la lista de capas y bloques residuales
-
-# GCNLinkPredictor
-class GCNLinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
-        super(GCNLinkPredictor, self).__init__()
-        self.conv1= GCNConv(in_channels, hidden_channels)
-        self.conv2= GCNConv(hidden_channels, out_channels)
-        self.conv3= GCNConv(out_channels, 1)
-
-        def forward(self, x_i, x_j, edge_index):
-            x = torch.cat([x_i, x_j], dim=-1) 
-            x = self.conv1(x, edge_index)
-            x = F.relu()
-            x = self.conv2(x, edge_index)
-            x = F.relu()
-            x = self.conv3 (x, edge_index)
-            return torch.sigmoid(x)
-        
-# GATLinkPredictor
-class GATLinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
-        super(GATLinkPredictor, self).__init__()
-        self.conv1 = GATConv(in_channels, hidden_channels)
-        self.conv2 = GATConv(hidden_channels, out_channels)
-        self.conv3 = GATConv(out_channels, 1)
-
-        def forward(self, x_i, x_j, edge_index):
-            x = torch.cat([x_i, x_j], dim=-1)
-            x = self.conv1(x, edge_index)
-            x = F.relu()
-            x = self.conv2(x, edge_index)
-            x = F.relu()
-            x = self.conv3(x, edge_index)
-            return torch.sigmoid(x)
-
-# GATSAGELinkPredictor
-class GATSAGELinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
-        super(GATSAGELinkPredictor, self).__init__()
-        self.conv1 = GATConv(in_channels, hidden_channels)
-        self.conv2 = GATConv(hidden_channels, out_channels)
-        self.conv3 = GATConv(out_channels, 1)
-
-        def forward(self, x_i, x_j, edge_index):
-            x = torch.cat([x_i, x_j], dim=-1)
-            x = self.conv1(x, edge_index)
-            x = F.relu()
-            x = self.conv2(x, edge_index)
-            x = F.relu()
-            x = self.conv3(x, edge_index)
-            return torch.sigmoid(x)
-        
-# VGAELinkPredictor
-class VGAELinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
-        super(VGAELinkPredictor, self).__init__()
-        self.conv1 = GCNConv(in_channels, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, out_channels)
-        self.conv3 = GCNConv(out_channels, 1)
-
-        def forward(self, x_i, x_j, edge_index):
-            x = torch.cat([x_i, x_j], dim=-1)
-            x = self.conv1(x, edge_index)
-            x = F.relu()
-            x = self.conv2(x, edge_index)
-            x = F.relu()
-            x = self.conv3(x, edge_index)
-            return torch.sigmoid(x)
-
-
 # Entrenamiento y predicción de enlaces
-def train_link_predictor(data, model, optimizer, device, use_embeddings=False, epochs=100):
+def train_link_predictor(data, model, optimizer, device, use_embeddings, epochs=100):
     """
     Trains a link prediction model.
     Args:
@@ -353,27 +334,16 @@ def predict_links(data, model, device, use_embeddings=False, threshold=0.5):
 # NOTA: Descomentar el código para ejecutarlo con el modelo que vayamos a entrenar. ¿Se pueden entrenar simultáneamente?
 
 # Inicializamos el modelo de predicción de enlaces y el optimizador
-"""
 layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
 #Habia un problema porque data.num_node_features es un tensor y no un entero
-model = LinkPredictor(layer_sizes).to(device)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = LinkPredictor(in_channels=data.num_node_features, hidden_channels=64, layer_sizes=layer_sizes, predictor_type='GCN').to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
-use_embeddings = True  # Cambiar a False para usar características de los nodos
+use_embeddings = False  # Cambiar a False para usar características de los nodos
 
 train_link_predictor(data, model, optimizer, device, use_embeddings=use_embeddings, epochs=100)
 pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, use_embeddings=use_embeddings)
-"""
-# Inicializamos el modelo de concatenación de características de nodos y el optimizador
-"""
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-concat_layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
-concat_model = NodeFeatureConcatenator(data.num_node_features, concat_layer_sizes[1], concat_layer_sizes[-1]).to(device)
-concat_optimizer = torch.optim.Adam(concat_model.parameters(), lr=0.01)
-
-train_link_predictor(data, concat_model, concat_optimizer, device, use_embeddings=False, epochs=100)
-pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, concat_model, device, use_embeddings=False)
-"""
 
 print(f'Positive link predictions: {pos_pred}')
 print(f'Negative link predictions: {neg_pred}')
@@ -397,4 +367,4 @@ def evaluate_model(pos_pred, neg_pred):
 evaluate_model(pos_pred, neg_pred)
 
 # Llamar a la función de visualización de embeddings cuando trabajemos con ellos. 
-visualize_embeddings(data, pos_edge_index, neg_edge_index, 'link_predictions.png')
+#visualize_embeddings(data, pos_edge_index, neg_edge_index, 'link_predictions.png')
