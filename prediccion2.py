@@ -234,13 +234,11 @@ class ResidualBlock(torch.nn.Module):
         return out
 """
 class LinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, layer_sizes, predictor_type):
+    def __init__(self, in_channels, hidden_channels, layer_sizes, predictor_type):
         super(LinkPredictor, self).__init__()
         if isinstance(layer_sizes, int):
             raise TypeError("layer_sizes debe ser una lista de enteros.")
         layers = []
-        #Concatenamos la capa inicial al tamaño deseado
-        self.concat_layer = torch.nn.Linear(in_channels * 2, layer_sizes[0])
         for i in range(len(layer_sizes) - 1):
             layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
         layers.append(torch.nn.Linear(layer_sizes[-1], 1))
@@ -259,23 +257,44 @@ class LinkPredictor(torch.nn.Module):
 
         self.final_layer = torch.nn.Linear(layer_sizes[-1], 1)
         """
-    def forward(self, x, x_i, x_j, edge_index, model_type):
-        if model_type=='CompleteGraph':
-            x = torch.cat([x_i, x_j], dim=-1)
-        elif model_type=='Concatenation': #Estamos en el de concatenación
-            row, col = edge_index
-            x_i = x[row]
-            x_j = x[col]
-            x = torch.cat([x_i, x_j], dim=-1)
-            
-        # Aplicamos la capa de concatenación
-        x = F.relu(self.concat_layer(x))
+    def forward(self, x_i, x_j, edge_index):
+        x = torch.cat([x_i, x_j], dim=-1)
+        #x = F.relu(self.concat_layer(x))
+        #x = self.link_predictor(x_i, x_j, edge_index)
+        #print(f"Link predictor output shape: {x.shape}")
         return torch.sigmoid(self.net(x))
 
+
+
+class GraphConcatenationNetwork(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, layer_sizes):
+        super(GraphConcatenationNetwork, self).__init__()
+
+        if isinstance(layer_sizes, int):
+            raise TypeError("layer_sizes debe ser una lista de enteros.")
+        #Concatenamos la capa inicial al tamaño deseado
+        self.concat_layer = torch.nn.Linear(in_channels * 2, layer_sizes[0])
+        layers = []
+        for i in range(len(layer_sizes) - 1):
+            layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
+        layers.append(torch.nn.Linear(layer_sizes[-1], 1))
+        self.net = torch.nn.Sequential(*layers)
+
+    def forward(self, x, edge_index):
+        # Concatenamos las características de los nodos conectados por las aristas
+        row, col = edge_index
+        x_i = x[row]
+        x_j = x[col]
+        x = torch.cat([x_i, x_j], dim=-1)
+        
+        # Aplicamos la capa de concatenación
+        x = F.relu(self.concat_layer(x))
+
+        return torch.sigmoid(self.net(x))
     
 
 # Entrenamiento y predicción de enlaces
-def train_link_predictor(data, model, optimizer, device,model_type, use_embeddings, epochs=100):
+def train_link_predictor(data, model, optimizer, device, use_embeddings, epochs=100):
     """
     Trains a link prediction model.
     Args:
@@ -290,22 +309,18 @@ def train_link_predictor(data, model, optimizer, device,model_type, use_embeddin
     """
     model.train()
     data = data.to(device)
-    
     for epoch in range(epochs):
         optimizer.zero_grad()
         pos_edge_index = data.edge_index
         neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1))
-
-        if model_type=='Concatenation':
-            pos_edge_index = sampled_edge_index
-            neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1))
+        
         if use_embeddings:
-            pos_out = model(data.embeddings, data.embeddings[pos_edge_index[0]], data.embeddings[pos_edge_index[1]], pos_edge_index, model_type)
-            neg_out = model(data.embeddings, data.embeddings[neg_edge_index[0]], data.embeddings[neg_edge_index[1]], neg_edge_index, model_type)
+            pos_out = model(data.embeddings[pos_edge_index[0]], data.embeddings[pos_edge_index[1]])
+            neg_out = model(data.embeddings[neg_edge_index[0]], data.embeddings[neg_edge_index[1]])
         else:
-            pos_out = model(data.x, data.x[pos_edge_index[0]], data.x[pos_edge_index[1]], pos_edge_index, model_type)
-            neg_out = model(data.x, data.x[neg_edge_index[0]], data.x[neg_edge_index[1]], neg_edge_index, model_type)
-
+            pos_out = model(data.x[pos_edge_index[0]], data.x[pos_edge_index[1]])
+            neg_out = model(data.x[neg_edge_index[0]], data.x[neg_edge_index[1]])
+        
         pos_loss = F.binary_cross_entropy(pos_out, torch.ones_like(pos_out))
         neg_loss = F.binary_cross_entropy(neg_out, torch.zeros_like(neg_out))
         loss = pos_loss + neg_loss
@@ -316,42 +331,111 @@ def train_link_predictor(data, model, optimizer, device,model_type, use_embeddin
         if epoch % 10 == 0:
             print(f'Epoch {epoch}, Loss: {loss.item()}')
 
-def predict_links(data, model, device, model_type, use_embeddings=False, threshold=0.5):
+def predict_links(data, model, device, use_embeddings=False, threshold=0.5):
     model.eval()
     data = data.to(device)
     pos_edge_index = data.edge_index
     neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1))
     
-    if model=='Concatenation':
-        pos_edge_index = sampled_edge_index
-        neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1))
-
     if use_embeddings:
-        pos_out = model(data.embeddings, data.embeddings[pos_edge_index[0]], data.embeddings[pos_edge_index[1]], pos_edge_index, model_type)
-        neg_out = model(data.embeddings, data.embeddings[neg_edge_index[0]], data.embeddings[neg_edge_index[1]], neg_edge_index, model_type)
+        pos_out = model(data.embeddings[pos_edge_index[0]], data.embeddings[pos_edge_index[1]], pos_edge_index)
+        neg_out = model(data.embeddings[neg_edge_index[0]], data.embeddings[neg_edge_index[1]], neg_edge_index)
     else:
-        pos_out = model(data.x, data.x[pos_edge_index[0]], data.x[pos_edge_index[1]], pos_edge_index, model_type)
-        neg_out = model(data.x, data.x[neg_edge_index[0]], data.x[neg_edge_index[1]], neg_edge_index, model_type)
+        pos_out = model(data.x[pos_edge_index[0]], data.x[pos_edge_index[1]], pos_edge_index)
+        neg_out = model(data.x[neg_edge_index[0]], data.x[neg_edge_index[1]] ,neg_edge_index)
     
     pos_pred = (pos_out > threshold).cpu().numpy()
     neg_pred = (neg_out > threshold).cpu().numpy()
     
     return pos_pred, neg_pred, pos_edge_index, neg_edge_index
 
+#Entrenamiento y predicción de enlaces con el modelo de concatenación
+#OJO, estoy teniendo problemas con la memoria cuda, por lo que hago entrenamiento por lotes
+def train_link_predictor_concat(data, model, optimizer, device, use_embeddings, epochs=100):
+    model.train()
+    data = data.to(device)
+    
+    for epoch in range(epochs):
+        optimizer.zero_grad()
+        
+        graph = data
+        edge_list = graph.edge_index
+
+        #Los movemos a device para que estén todos en el mismo
+        #device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')  NOTA: La memoria cuda no es suficiente, aunque sería más rápido
+        device = torch.device('cpu')
+
+        graph = graph.to(device)
+        edge_list = edge_list.to(device)
+
+        # Seleccionamos aleatoriamente algunas aristas del edge_index
+        num_edges = edge_list.size(1)
+        num_sampled_edges = int(0.5 * num_edges)  # Por ejemplo, selecciona el 50% de las aristas
+        sampled_indices = torch.randperm(num_edges, device=device)[:num_sampled_edges]
+        sampled_edge_index = edge_list[:, sampled_indices].to(device)
+
+        pos_edge_index = sampled_edge_index
+        neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1)).to(device)
+        
+        # Asegurar forma correcta de los índices de aristas
+        assert pos_edge_index.shape[0] == 2, f"ERROR: pos_edge_index tiene forma {pos_edge_index.shape}, debe ser [2, num_edges]"
+        assert neg_edge_index.shape[0] == 2, f"ERROR: neg_edge_index tiene forma {neg_edge_index.shape}, debe ser [2, num_edges]"
+
+        # Llamar al modelo correctamente
+        pos_out = model(data.x, pos_edge_index)
+        neg_out = model(data.x, neg_edge_index)
+
+        # Calcular la pérdida
+        pos_loss = F.binary_cross_entropy(pos_out, torch.ones_like(pos_out))
+        neg_loss = F.binary_cross_entropy(neg_out, torch.zeros_like(neg_out))
+        loss = pos_loss + neg_loss
+        
+        loss.backward()
+        optimizer.step()
+        
+        if epoch % 10 == 0:
+            print(f'Epoch {epoch}, Loss: {loss.item()}')
+
+def predict_links_concat(data, model, device, use_embeddings=False, threshold=0.5):
+    model.eval()
+    data = data.to(device)
+
+    pos_edge_index = data.edge_index.to(device)
+    neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1)).to(device)
+
+    # Asegurar forma correcta
+    if neg_edge_index.shape[0] != 2:
+        neg_edge_index = neg_edge_index.T
+
+    pos_out = model(data.x, pos_edge_index)
+    neg_out = model(data.x, neg_edge_index)
+
+    pos_pred = (pos_out > threshold).cpu().numpy()
+    neg_pred = (neg_out > threshold).cpu().numpy()
+
+    return pos_pred, neg_pred, pos_edge_index, neg_edge_index
+
+# NOTA: Descomentar el código para ejecutarlo con el modelo que vayamos a entrenar. ¿Se pueden entrenar simultáneamente?
 
 # Inicializamos el modelo de predicción de enlaces y el optimizador
-
+"""
 layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
 #Habia un problema porque data.num_node_features es un tensor y no un entero
 # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 device = torch.device('cpu')
+model = LinkPredictor(in_channels=data.num_node_features, hidden_channels=64, layer_sizes=layer_sizes, predictor_type='GCN').to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 use_embeddings = False  # Cambiar a False para usar características de los nodos
 
-#Para el modelo de concatenación
+"""
 graph = data
 edge_list = graph.edge_index
-#Lo movemos todos al mismo
+
+#Los movemos a device para que estén todos en el mismo
+#device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')  NOTA: La memoria cuda no es suficiente, aunque sería más rápido
+device = torch.device('cpu')
+
 graph = graph.to(device)
 edge_list = edge_list.to(device)
 
@@ -361,13 +445,15 @@ num_sampled_edges = int(0.5 * num_edges)  # Por ejemplo, selecciona el 50% de la
 sampled_indices = torch.randperm(num_edges, device=device)[:num_sampled_edges]
 sampled_edge_index = edge_list[:, sampled_indices].to(device)
 
-model_type = 'Concatenation' # Cambiar a 'Concatenation' para usar el modelo de concatenación
-model = LinkPredictor(in_channels=data.num_node_features, layer_sizes=layer_sizes, predictor_type='GCN').to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
-# Entrenamos el modelo
-train_link_predictor(data, model, optimizer, device, model_type, use_embeddings=False, epochs=100)
-pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, model_type, use_embeddings=False)
+layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
+model = GraphConcatenationNetwork(in_channels=graph.num_node_features, hidden_channels=64, layer_sizes=layer_sizes).to(device)
+
+output = model(graph.x, sampled_edge_index)
+
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+train_link_predictor_concat(data, model, optimizer, device, use_embeddings=False, epochs=100)
+pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links_concat(data, model, device, use_embeddings=False)
 
 
 #print(f'Positive link predictions: {pos_pred}')
@@ -378,9 +464,9 @@ def evaluate_model(pos_pred, neg_pred):
     y_pred = list(pos_pred) + list(neg_pred)
     
     accuracy = accuracy_score(y_true, y_pred)
-    precision = precision_score(y_true, y_pred, zero_division=1)
-    recall = recall_score(y_true, y_pred, zero_division=1)
-    f1 = f1_score(y_true, y_pred, zero_division=1)
+    precision = precision_score(y_true, y_pred)
+    recall = recall_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred)
     auc_roc = roc_auc_score(y_true, y_pred)
     
     print(f'Accuracy: {accuracy:.4f}')
