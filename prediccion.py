@@ -11,7 +11,7 @@ from torch_geometric.utils import remove_isolated_nodes
 from sklearn.preprocessing import StandardScaler
 from torch_geometric.utils import to_undirected
 from sklearn.decomposition import PCA
-from torch_geometric.nn import GCNConv, GATConv
+from torch_geometric.nn import GCNConv, GATConv, VGAE, SAGEConv
 
 import pykeen
 from pykeen.pipeline import pipeline
@@ -96,95 +96,96 @@ print(f'Contiene nodos aislados: {data.has_isolated_nodes()}')
 print(f'Contiene bucles: {data.has_self_loops()}')
 print(f'No es dirigido: {data.is_undirected()}')
 """
+
 #Generación del embedding usando pykeen. El problema es que tenemos que cambiar nuestro grafo
 #al formato de tripletas con el que trabaja pykeen
-"""
-sources = data.edge_index[0].tolist()
-targets = data.edge_index[1].tolist()
-relations = ["linked_to"]*len(sources)
+
+sources = data.edge_index[0].cpu().numpy()
+targets = data.edge_index[1].cpu().numpy()  
+relations = np.array(["linked_to"] * len(sources), dtype=str) 
 
 # Convertir a formato de PyKEEN
-triples_array = np.array([(str(s), r, str(t)) for s, r, t in zip(sources, relations, targets)])
-tf = TriplesFactory.from_labeled_triples(triples_array)
+triples_array = np.column_stack((sources.astype(str), relations, targets.astype(str)))
 
-# Entrenar un modelo de embeddings en PyKEEN
+# Crear la TriplesFactory para entrenamiento y prueba (si no no funciona el pipeline)
+tf = TriplesFactory.from_labeled_triples(triples_array)
+tf_train, tf_test = tf.split([0.8, 0.2])
+
+# Entrenamos un modelo de embeddings en PyKEEN
 result = pipeline(
-    training=tf,
+    training=tf_train,
+    testing=tf_test,
     model="TransE",
-    training_kwargs={"num_epochs": 100}, 
+    training_kwargs={
+        "num_epochs": 100, 
+        "batch_size": 256
+    },
+    optimizer_kwargs={
+        "lr": 0.01
+    },
 )
 
 # Obtenemos embeddings de nodos
 embedding_model = result.model
-node_embeddings = embedding_model.entity_representations[0]  # Representaciones de nodos
+node_embeddings = embedding_model.entity_representations[0]
 data.embeddings = node_embeddings
-"""
+
+
 # GCNLinkPredictor
 class GCNLinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
+    def __init__(self, in_channels, out_channels):
         super(GCNLinkPredictor, self).__init__()
-        self.conv1 = GCNConv(in_channels, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.conv3 = GCNConv(hidden_channels, out_channels)
+        self.conv = GCNConv(in_channels, out_channels)
+        self.fc = torch.nn.Linear(out_channels, 1)
 
-    def forward(self, x_i, x_j, edge_index):
-        x = torch.cat([x_i, x_j], dim=-1)
-        x = self.conv1(x, edge_index)
+    def forward(self, x, edge_index):
+        x = self.conv(x, edge_index)
         x = F.relu(x)
-        x = self.conv2(x, edge_index)
-        x = F.relu(x)
-        x = self.conv3(x, edge_index)
+        x = self.fc(x)
         return torch.sigmoid(x)
 
 # GATLinkPredictor
 class GATLinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
+    def __init__(self, in_channels, out_channels, heads=1):
         super(GATLinkPredictor, self).__init__()
-        self.conv1 = GATConv(in_channels, hidden_channels)
-        self.conv2 = GATConv(hidden_channels, hidden_channels)
-        self.conv3 = GATConv(hidden_channels, out_channels)
+        self.conv = GATConv(in_channels, out_channels, heads=heads, concat=False)
+        self.fc = torch.nn.Linear(out_channels, 1)
 
-    def forward(self, x_i, x_j, edge_index):
-        x = torch.cat([x_i, x_j], dim=-1)
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = self.conv2(x, edge_index)
-        x = F.relu(x)
-        x = self.conv3(x, edge_index)
+    def forward(self, x, edge_index):
+        x = self.conv(x, edge_index)
+        x = F.relu(x)  
+        x = self.fc(x)
         return torch.sigmoid(x)
 
 # GATSAGELinkPredictor
 class GATSAGELinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels):
+    def __init__(self, in_channels, out_channels):
         super(GATSAGELinkPredictor, self).__init__()
-        self.conv1 = GATConv(in_channels, hidden_channels)
-        self.conv2 = GATConv(hidden_channels, out_channels)
-        self.conv3 = GATConv(out_channels, 1)
+        self.conv = SAGEConv(in_channels, out_channels)
+        self.fc = torch.nn.Linear(out_channels, 1)
 
-    def forward(self, x_i, x_j, edge_index):
-        x = torch.cat([x_i, x_j], dim=-1)
-        x = self.conv1(x, edge_index)
+    def forward(self, x, edge_index):
+        x = self.conv(x, edge_index)
         x = F.relu(x)
-        x = self.conv2(x, edge_index)
-        x = F.relu(x)
-        x = self.conv3(x, edge_index)
+        x = self.fc(x)
         return torch.sigmoid(x)
 
 # VGAELinkPredictor
 class VGAELinkPredictor(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels):
         super(VGAELinkPredictor, self).__init__()
-        self.conv1 = GCNConv(in_channels, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, out_channels)
-        self.conv3 = GCNConv(out_channels, 1)
+        self.encoder = VGAE(
+            torch.nn.Sequential(
+                GCNConv(in_channels, hidden_channels),
+                torch.nn.ReLU(),
+                GCNConv(hidden_channels, out_channels)
+            )
+        )
+        self.fc = torch.nn.Linear(out_channels, 1)
 
-    def forward(self, x_i, x_j, edge_index):
-        x = torch.cat([x_i, x_j], dim=-1)
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = self.conv2(x, edge_index)
-        x = F.relu(x)
-        x = self.conv3(x, edge_index)
+    def forward(self, x, edge_index):
+        z = self.encoder.encode(x, edge_index)
+        x = self.fc(z)
         return torch.sigmoid(x)
 
     
@@ -243,22 +244,22 @@ class LinkPredictor(torch.nn.Module):
         self.concat_layer = torch.nn.Linear(in_channels * 2, layer_sizes[0])
         for i in range(len(layer_sizes) - 1):
             layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
-        layers.append(torch.nn.Linear(layer_sizes[-1], 1))
+        #layers.append(torch.nn.Linear(layer_sizes[-1], 1))
         self.net = torch.nn.Sequential(*layers)
-        """
+        
         if predictor_type == 'GCN':
-            self.link_predictor = GCNLinkPredictor(layer_sizes[-2], hidden_channels, layer_sizes[-1])
+            self.link_predictor = GCNLinkPredictor(layer_sizes[-1], layer_sizes[-1])
         elif predictor_type == 'GAT':
-            self.link_predictor = GATLinkPredictor(layer_sizes[-2], hidden_channels, layer_sizes[-1])
+            self.link_predictor = GATLinkPredictor(layer_sizes[-1], layer_sizes[-1])
         elif predictor_type == 'GATSAGE':
-            self.link_predictor = GATSAGELinkPredictor(layer_sizes[-2], hidden_channels, layer_sizes[-1])
+            self.link_predictor = GATSAGELinkPredictor(layer_sizes[-1], layer_sizes[-1])
         elif predictor_type == 'VGAE':
-            self.link_predictor = VGAELinkPredictor(layer_sizes[-2], hidden_channels, layer_sizes[-1])
+            self.link_predictor = VGAELinkPredictor(layer_sizes[-1], layer_sizes[-1])
         else:
             raise ValueError(f"Unknown predictor type: {predictor_type}")
 
         self.final_layer = torch.nn.Linear(layer_sizes[-1], 1)
-        """
+        
     def forward(self, x, x_i, x_j, edge_index, model_type):
         if model_type=='CompleteGraph':
             x = torch.cat([x_i, x_j], dim=-1)
@@ -270,7 +271,9 @@ class LinkPredictor(torch.nn.Module):
             
         # Aplicamos la capa de concatenación
         x = F.relu(self.concat_layer(x))
-        return torch.sigmoid(self.net(x))
+        x = self.net(x)
+        x = self.link_predictor(x, edge_index)
+        return torch.sigmoid(x)
 
     
 
@@ -361,13 +364,13 @@ num_sampled_edges = int(0.5 * num_edges)  # Por ejemplo, selecciona el 50% de la
 sampled_indices = torch.randperm(num_edges, device=device)[:num_sampled_edges]
 sampled_edge_index = edge_list[:, sampled_indices].to(device)
 
-model_type = 'Concatenation' # Cambiar a 'Concatenation' para usar el modelo de concatenación
+model_type = 'CompleteGraph' # Cambiar a 'Concatenation' para usar el modelo de concatenación
 model = LinkPredictor(in_channels=data.num_node_features, layer_sizes=layer_sizes, predictor_type='GCN').to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 # Entrenamos el modelo
-train_link_predictor(data, model, optimizer, device, model_type, use_embeddings=False, epochs=100)
-pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, model_type, use_embeddings=False)
+#train_link_predictor(data, model, optimizer, device, model_type, use_embeddings=False, epochs=100)
+#pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, model_type, use_embeddings=False)
 
 
 #print(f'Positive link predictions: {pos_pred}')
@@ -389,7 +392,7 @@ def evaluate_model(pos_pred, neg_pred):
     print(f'F1 Score: {f1:.4f}')
     print(f'AUC-ROC: {auc_roc:.4f}')
 
-evaluate_model(pos_pred, neg_pred)
+#evaluate_model(pos_pred, neg_pred)
 
 # Llamar a la función de visualización de embeddings cuando trabajemos con ellos. 
 #visualize_embeddings(data, pos_edge_index, neg_edge_index, 'link_predictions.png')
