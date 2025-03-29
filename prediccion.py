@@ -12,11 +12,17 @@ from sklearn.preprocessing import StandardScaler
 from torch_geometric.utils import to_undirected
 from sklearn.decomposition import PCA
 from torch_geometric.nn import GCNConv, GATConv, VGAE, SAGEConv
-
+from torch.utils.tensorboard import SummaryWriter
 import pykeen
 from pykeen.pipeline import pipeline
 from pykeen.triples import TriplesFactory
 import numpy as np
+import random
+import datetime
+
+USE_EMBEDDINGS = False
+MODEL_TYPE = 'CompleteGraph' # Cambiar a 'Concatenation' para usar el modelo de concatenación
+PREDICTOR_TYPE = 'GCN' # Cambiar a 'GAT', 'GATSAGE' o 'VGAE' según el tipo de predictor que quieras usar
 
 # Cargar el dataset
 dataset = Planetoid(root='/tmp/Pubmed', name='Pubmed')
@@ -99,36 +105,50 @@ print(f'No es dirigido: {data.is_undirected()}')
 
 #Generación del embedding usando pykeen. El problema es que tenemos que cambiar nuestro grafo
 #al formato de tripletas con el que trabaja pykeen
+# Establecemos la semilla para reproducibilidad. Si no, toma un valor aleatorio muy alto
+# y no se puede reproducir el resultado.
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(SEED)
+    torch.cuda.manual_seed_all(SEED)
 
-sources = data.edge_index[0].cpu().numpy()
-targets = data.edge_index[1].cpu().numpy()  
-relations = np.array(["linked_to"] * len(sources), dtype=str) 
+def generate_embeddings_with_pykeen(data):
+    sources = data.edge_index[0].cpu().numpy()
+    targets = data.edge_index[1].cpu().numpy()  
+    relations = np.array(["linked_to"] * len(sources), dtype=str) 
 
-# Convertir a formato de PyKEEN
-triples_array = np.column_stack((sources.astype(str), relations, targets.astype(str)))
+    # Convertir a formato de PyKEEN
+    triples_array = np.column_stack((sources.astype(str), relations, targets.astype(str)))
 
-# Crear la TriplesFactory para entrenamiento y prueba (si no no funciona el pipeline)
-tf = TriplesFactory.from_labeled_triples(triples_array)
-tf_train, tf_test = tf.split([0.8, 0.2])
+    # Crear la TriplesFactory para entrenamiento y prueba (si no no funciona el pipeline)
+    tf = TriplesFactory.from_labeled_triples(triples_array)
+    tf_train, tf_test = tf.split([0.8, 0.2])
 
-# Entrenamos un modelo de embeddings en PyKEEN
-result = pipeline(
-    training=tf_train,
-    testing=tf_test,
-    model="TransE",
-    training_kwargs={
-        "num_epochs": 100, 
-        "batch_size": 256
-    },
-    optimizer_kwargs={
-        "lr": 0.01
-    },
-)
+    # Entrenamos un modelo de embeddings en PyKEEN
+    result = pipeline(
+        training=tf_train,
+        testing=tf_test,
+        model="TransE",
+        random_seed=SEED,
+        training_kwargs={
+            "num_epochs": 100, 
+            "batch_size": 256
+        },
+        optimizer_kwargs={
+            "lr": 0.01
+        },
+    )
+    return result
 
 # Obtenemos embeddings de nodos
-embedding_model = result.model
-node_embeddings = embedding_model.entity_representations[0]
-data.embeddings = node_embeddings
+if not hasattr(data, "embeddings"):  # Solo entrena si no existen embeddings, para no repetir el entrenamiento
+    result = generate_embeddings_with_pykeen(data)
+    embedding_model = result.model
+    node_embeddings = embedding_model.entity_representations[0]
+    data.embeddings = node_embeddings
 
 
 # GCNLinkPredictor
@@ -275,8 +295,14 @@ class LinkPredictor(torch.nn.Module):
         x = self.link_predictor(x, edge_index)
         return torch.sigmoid(x)
 
-    
+# Crear carpeta con timestamp
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+path_name = f"tipo_entrada-{MODEL_TYPE}_uso_embeddings-{USE_EMBEDDINGS}_tipo_gnn-{PREDICTOR_TYPE}_{timestamp}"
+log_dir = os.path.join("results", path_name)
+os.makedirs(log_dir, exist_ok=True)
 
+# Inicializar TensorBoard
+writer = SummaryWriter(log_dir=log_dir)
 # Entrenamiento y predicción de enlaces
 def train_link_predictor(data, model, optimizer, device,model_type, use_embeddings, epochs=100):
     """
@@ -303,11 +329,14 @@ def train_link_predictor(data, model, optimizer, device,model_type, use_embeddin
             pos_edge_index = sampled_edge_index
             neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1))
         if use_embeddings:
-            pos_out = model(data.embeddings, data.embeddings[pos_edge_index[0]], data.embeddings[pos_edge_index[1]], pos_edge_index, model_type)
-            neg_out = model(data.embeddings, data.embeddings[neg_edge_index[0]], data.embeddings[neg_edge_index[1]], neg_edge_index, model_type)
+            pos_out = model(data.embeddings.weight, data.embeddings.weight[pos_edge_index[0]], data.embeddings.weight[pos_edge_index[1]], pos_edge_index, model_type)
+            neg_out = model(data.embeddings.weight, data.embeddings.weight[neg_edge_index[0]], data.embeddings.weight[neg_edge_index[1]], neg_edge_index, model_type)
         else:
             pos_out = model(data.x, data.x[pos_edge_index[0]], data.x[pos_edge_index[1]], pos_edge_index, model_type)
             neg_out = model(data.x, data.x[neg_edge_index[0]], data.x[neg_edge_index[1]], neg_edge_index, model_type)
+
+        #Añadir la opcion de que reciba tanto nodos como los embeddings
+        
 
         pos_loss = F.binary_cross_entropy(pos_out, torch.ones_like(pos_out))
         neg_loss = F.binary_cross_entropy(neg_out, torch.zeros_like(neg_out))
@@ -315,7 +344,9 @@ def train_link_predictor(data, model, optimizer, device,model_type, use_embeddin
         
         loss.backward()
         optimizer.step()
+        writer.add_scalar('Loss/train', loss.item(), epoch)
         
+
         if epoch % 10 == 0:
             print(f'Epoch {epoch}, Loss: {loss.item()}')
 
@@ -330,8 +361,8 @@ def predict_links(data, model, device, model_type, use_embeddings=False, thresho
         neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1))
 
     if use_embeddings:
-        pos_out = model(data.embeddings, data.embeddings[pos_edge_index[0]], data.embeddings[pos_edge_index[1]], pos_edge_index, model_type)
-        neg_out = model(data.embeddings, data.embeddings[neg_edge_index[0]], data.embeddings[neg_edge_index[1]], neg_edge_index, model_type)
+        pos_out = model(data.embeddings.weight, data.embeddings.weight[pos_edge_index[0]], data.embeddings.weight[pos_edge_index[1]], pos_edge_index, model_type)
+        neg_out = model(data.embeddings.weight, data.embeddings.weight[neg_edge_index[0]], data.embeddings.weight[neg_edge_index[1]], neg_edge_index, model_type)
     else:
         pos_out = model(data.x, data.x[pos_edge_index[0]], data.x[pos_edge_index[1]], pos_edge_index, model_type)
         neg_out = model(data.x, data.x[neg_edge_index[0]], data.x[neg_edge_index[1]], neg_edge_index, model_type)
@@ -349,7 +380,7 @@ layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_no
 # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 device = torch.device('cpu')
 
-use_embeddings = False  # Cambiar a False para usar características de los nodos
+use_embeddings = USE_EMBEDDINGS # Cambiar a False para usar características de los nodos
 
 #Para el modelo de concatenación
 graph = data
@@ -361,16 +392,17 @@ edge_list = edge_list.to(device)
 # Seleccionamos aleatoriamente algunas aristas del edge_index
 num_edges = edge_list.size(1)
 num_sampled_edges = int(0.5 * num_edges)  # Por ejemplo, selecciona el 50% de las aristas
+torch.manual_seed(SEED)
 sampled_indices = torch.randperm(num_edges, device=device)[:num_sampled_edges]
 sampled_edge_index = edge_list[:, sampled_indices].to(device)
 
-model_type = 'CompleteGraph' # Cambiar a 'Concatenation' para usar el modelo de concatenación
-model = LinkPredictor(in_channels=data.num_node_features, layer_sizes=layer_sizes, predictor_type='GCN').to(device)
+model_type = MODEL_TYPE # Cambiar a 'Concatenation' para usar el modelo de concatenación
+model = LinkPredictor(in_channels=data.num_node_features, layer_sizes=layer_sizes, predictor_type=PREDICTOR_TYPE).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 # Entrenamos el modelo
-#train_link_predictor(data, model, optimizer, device, model_type, use_embeddings=False, epochs=100)
-#pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, model_type, use_embeddings=False)
+train_link_predictor(data, model, optimizer, device, model_type, use_embeddings, epochs=100)
+pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, model_type, use_embeddings=False)
 
 
 #print(f'Positive link predictions: {pos_pred}')
@@ -392,7 +424,8 @@ def evaluate_model(pos_pred, neg_pred):
     print(f'F1 Score: {f1:.4f}')
     print(f'AUC-ROC: {auc_roc:.4f}')
 
-#evaluate_model(pos_pred, neg_pred)
+writer.close()
+evaluate_model(pos_pred, neg_pred)
 
 # Llamar a la función de visualización de embeddings cuando trabajemos con ellos. 
 #visualize_embeddings(data, pos_edge_index, neg_edge_index, 'link_predictions.png')
