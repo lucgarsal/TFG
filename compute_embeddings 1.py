@@ -22,13 +22,20 @@ triples_df = pd.DataFrame({
     'positive': [1] * len(subjects)
 })
 
+# Convertir los IDs de los nodos a string
+triples_df['subject'] = triples_df['subject'].astype(str)
+triples_df['object'] = triples_df['object'].astype(str)
+triples_df['predicate'] = triples_df['predicate'].astype(str)
+
 #triples_df = pd.read_csv('./data/train.txt', sep='\t', header=None, names=['subject', 'predicate', 'object', 'positive']).dropna()
 # Create a dataset from the triples
 triples_factory = TriplesFactory.from_labeled_triples(triples=triples_df.values)
+
 # Fit the model
 models = []
 
-embedding_dim = 256
+#Hago que las dimensiones coincidan para poder concatenarlos después
+embedding_dim = dataset.num_features
 
 models.append(
     TransE(triples_factory=triples_factory,
@@ -46,18 +53,9 @@ training_loop = SLCWATrainingLoop(
 training_loop.train(
     triples_factory=triples_factory,
     num_epochs=50,
-    batch_size=256,
+    batch_size=min(256, triples_factory.num_triples),
 )
 
-entity_embeddings = model.entity_representations[0](indices=None).detach().cpu().numpy()
-embeddings = []
-with open('./data/entities_graph_emb.tsv') as f:
-    for line in f:
-        entity = line.strip().split('\t')[1]
-        if entity in triples_factory.entity_to_id:
-            embeddings.append(entity_embeddings[triples_factory.entity_to_id[entity]])
-        else:
-            embeddings.append(np.zeros(embedding_dim))    
-    
-embeddings = np.array(embeddings)
-np.save('./data/embeddings_TransE.npy', embeddings)
+entity_embeddings = model.entity_representations[0]().detach().cpu().numpy()
+
+np.save(f'./data/embeddings_TransE_{dataset.name}.npy', entity_embeddings)

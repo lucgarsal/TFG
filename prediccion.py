@@ -20,13 +20,18 @@ import numpy as np
 import random
 import datetime
 
-USE_EMBEDDINGS = False
+#Definimos variables globales para el uso de embeddings y el tipo de GNN concolucional a usar
+USE_EMBEDDINGS = True
+USE_MIXED = False
 GNN_TYPE = 'GATSAGE' # Cambiar a 'GAT', 'GATSAGE' o 'VGAE' según el tipo de predictor que quieras usar
 
 # Cargar el dataset
 dataset = Planetoid(root='/tmp/Pubmed', name='Pubmed')
 print(f"Dataset: {dataset.data}")
 data = dataset[0]
+
+#Imputamos los embeddings de los nodos en el dataset
+data.embeddings = torch.tensor(np.load(f'data/embeddings_TransE_{dataset.name}.npy'), dtype=torch.float32).to(data.x.device)
 
 # Preprocesado básico de los datos
 
@@ -162,7 +167,6 @@ class VGAELinkPredictor(torch.nn.Module):
 # Definimos el modelo para la predicción de enlaces. En primer lugar definimos un bloque residual para las capas. Esto sirve
 # para que no se pierda información en las capas intermedias.
 class ResidualBlock(torch.nn.Module):
-    #Este da fallo al multiplicar las matrices por las dimensiones
     def __init__(self, in_channels, out_channels):
         super(ResidualBlock, self).__init__()
         self.linear = torch.nn.Linear(in_channels, out_channels)
@@ -204,15 +208,23 @@ class LinkPredictor(torch.nn.Module):
         
         self.final_layer = torch.nn.Linear(layer_sizes[-1], 1)
     
-    #Primero hacemos la convolución para obtener una mejor representación de los nodos
+    #Primero hacemos la convolución para obtener una mejor representación del grafo
     #Después extraemos las características de los nodos dados por la lista edge_index y las concatenamos
     #Finalmente pasamos por las capas residuales cuyos tamaños se definen en layer_sizes
     #y por la capa final que nos da la predicción de si existe o no un enlace entre los nodos
 
-    def forward(self, data, edge_index):
-        x = self.gnn_model(data.x, data.edge_index)
-        #x = self.gnn_model(data, edge_index)
-        x=data.x
+    def forward(self, data, edge_index, use_embeddings, use_mixed):
+        print(f"Shape de data.embeddings: {data.embeddings.shape}")
+        print(f"Shape de edge_index: {edge_index.shape}")
+
+        if use_embeddings:
+            x = self.gnn_model(data.embeddings, edge_index)
+        elif use_mixed:
+            x = torch.cat([data.x, data.embeddings], dim=1)
+            x = self.gnn_model(x, edge_index)
+        else:
+            x = self.gnn_model(data.x, data.edge_index)
+
         edge_index=edge_index.long()
         src_idx, dest_idx = edge_index
         x_i = x[src_idx]
@@ -235,7 +247,7 @@ os.makedirs(log_dir, exist_ok=True)
 # Inicializar TensorBoard
 writer = SummaryWriter(log_dir=log_dir)
 # Entrenamiento y predicción de enlaces
-def train_link_predictor(data, model, optimizer, device, use_embeddings, epochs=100):
+def train_link_predictor(data, model, optimizer, device, use_embeddings, use_mixed, epochs=100):
     model.train()
     data = data.to(device)
     
@@ -247,15 +259,9 @@ def train_link_predictor(data, model, optimizer, device, use_embeddings, epochs=
 
         pos_edge_index = pos_edge_index.long()
         neg_edge_index = neg_edge_index.long()  
-        if use_embeddings:
-            pos_out = model(data.embeddings, pos_edge_index)
-            neg_out = model(data.embeddings, neg_edge_index)
-        else:
-            pos_out = model(data, pos_edge_index)
-            neg_out = model(data, neg_edge_index)
-
-        #Añadir la opcion de que reciba tanto nodos como los embeddings
-        
+       
+        pos_out = model(data, pos_edge_index, use_embeddings, use_mixed)
+        neg_out = model(data, neg_edge_index, use_embeddings, use_mixed)
 
         pos_loss = F.binary_cross_entropy(pos_out, torch.ones_like(pos_out))
         neg_loss = F.binary_cross_entropy(neg_out, torch.zeros_like(neg_out))
@@ -269,19 +275,18 @@ def train_link_predictor(data, model, optimizer, device, use_embeddings, epochs=
         if epoch % 10 == 0:
             print(f'Epoch {epoch}, Loss: {loss.item()}')
 
-def predict_links(data, model, device, use_embeddings=False, threshold=0.5):
+def predict_links(data, model, device, use_embeddings, use_mixed, threshold=0.5):
     model.eval()
     data = data.to(device)
+
     pos_edge_index = data.edge_index
     neg_edge_index = negative_sampling(pos_edge_index, num_nodes=data.num_nodes, num_neg_samples=pos_edge_index.size(1)).to(torch.long)
     pos_edge_index = pos_edge_index.long()
     neg_edge_index = neg_edge_index.long()
-    if use_embeddings:
-            pos_out = model(data.embeddings, pos_edge_index)
-            neg_out = model(data.embeddings, neg_edge_index)
-    else:
-            pos_out = model(data, pos_edge_index)
-            neg_out = model(data, neg_edge_index)
+
+   
+    pos_out = model(data, pos_edge_index, use_embeddings, use_mixed)
+    neg_out = model(data, neg_edge_index, use_embeddings, use_mixed)
     
     pos_pred = (pos_out > threshold).cpu().numpy()
     neg_pred = (neg_out > threshold).cpu().numpy()
@@ -296,10 +301,11 @@ layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_no
 # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 device = torch.device('cpu')
 
-use_embeddings = USE_EMBEDDINGS # Cambiar a False para usar características de los nodos
+use_embeddings = USE_EMBEDDINGS
+use_mixed = USE_MIXED 
 graph = data
 edge_list = graph.edge_index
-#Lo movemos todos al mismo
+#Lo movemos todos al mismo dispositivo
 graph = graph.to(device)
 edge_list = edge_list.to(device).long()
 
@@ -309,16 +315,13 @@ num_sampled_edges = int(0.5 * num_edges)  # Por ejemplo, selecciona el 50% de la
 sampled_indices = torch.randperm(num_edges, device=device)[:num_sampled_edges]
 sampled_edge_index = edge_list[:, sampled_indices].to(device).long()
 
-print(f"edge_list dtype: {edge_list.dtype}")
-print(f"sampled_edge_index dtype: {sampled_edge_index.dtype}")
-
 
 model = LinkPredictor(in_channels=data.num_node_features, layer_sizes=layer_sizes, gnn_type=GNN_TYPE).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 # Entrenamos el modelo
-train_link_predictor(data, model, optimizer, device, use_embeddings, epochs=100)
-pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, use_embeddings=False)
+train_link_predictor(data, model, optimizer, device, use_embeddings, use_mixed,epochs=100)
+pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, use_embeddings, use_mixed)
 
 def evaluate_model(pos_pred, neg_pred):
     y_true = [1] * len(pos_pred) + [0] * len(neg_pred)
@@ -338,6 +341,3 @@ def evaluate_model(pos_pred, neg_pred):
 
 writer.close()
 evaluate_model(pos_pred, neg_pred)
-
-# Llamar a la función de visualización de embeddings cuando trabajemos con ellos. 
-#visualize_embeddings(data, pos_edge_index, neg_edge_index, 'link_predictions.png')
