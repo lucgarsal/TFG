@@ -94,7 +94,7 @@ def visualize(h, color, filename, pos_edge_index=None, neg_edge_index=None):
     plt.show()
 
 # Mostrar características del conjunto de datos
-
+"""
 print(f'Número de nodos: {data.num_nodes}')
 print(f'Número de features por nodo: {data.num_node_features}')
 print(f'Número de clases: {dataset.num_classes}')
@@ -107,7 +107,7 @@ print(f'Contiene nodos aislados: {data.has_isolated_nodes()}')
 print(f'Contiene bucles: {data.has_self_loops()}')
 print(f'No es dirigido: {data.is_undirected()}')
 print(f"Estructura de los datos: {data}")
-print(f"Some features: {data.x[:5]}")
+"""
 
 
 # GCNLinkPredictor
@@ -203,10 +203,10 @@ class LinkPredictor(torch.nn.Module):
         
         layers = []
         for i in range(len(layer_sizes) - 1):
-            layers.append(ResidualBlock(layer_sizes[i], layer_sizes[i + 1]))
+            layers.append(ResidualBlock(layer_sizes[i]*2, layer_sizes[i + 1]*2))
         self.net = torch.nn.Sequential(*layers)
         
-        self.final_layer = torch.nn.Linear(layer_sizes[-1], 1)
+        self.final_layer = torch.nn.Linear(layer_sizes[-1]*2, 1)
     
     #Primero hacemos la convolución para obtener una mejor representación del grafo
     #Después extraemos las características de los nodos dados por la lista edge_index y las concatenamos
@@ -214,9 +214,6 @@ class LinkPredictor(torch.nn.Module):
     #y por la capa final que nos da la predicción de si existe o no un enlace entre los nodos
 
     def forward(self, data, edge_index, use_embeddings, use_mixed):
-        print(f"Shape de data.embeddings: {data.embeddings.shape}")
-        print(f"Shape de edge_index: {edge_index.shape}")
-
         if use_embeddings:
             x = self.gnn_model(data.embeddings, edge_index)
         elif use_mixed:
@@ -224,15 +221,12 @@ class LinkPredictor(torch.nn.Module):
             x = self.gnn_model(x, edge_index)
         else:
             x = self.gnn_model(data.x, data.edge_index)
-
         edge_index=edge_index.long()
         src_idx, dest_idx = edge_index
         x_i = x[src_idx]
         x_j = x[dest_idx]
         x = torch.cat([x_i, x_j], dim=-1)
-
         x = self.net(x)
-
         x= self.final_layer(x)
         res=torch.sigmoid(x)
 
@@ -240,7 +234,7 @@ class LinkPredictor(torch.nn.Module):
 
 # Crear carpeta con timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-path_name = f"uso_embeddings-{USE_EMBEDDINGS}_tipo_gnn-{GNN_TYPE}_{timestamp}"
+path_name = f"uso_embeddings-{USE_EMBEDDINGS}_uso_mixto-{USE_MIXED}_tipo_gnn-{GNN_TYPE}_{timestamp}"
 log_dir = os.path.join("results", path_name)
 os.makedirs(log_dir, exist_ok=True)
 
@@ -333,6 +327,12 @@ def evaluate_model(pos_pred, neg_pred):
     f1 = f1_score(y_true, y_pred, zero_division=1)
     auc_roc = roc_auc_score(y_true, y_pred)
     
+    writer.add_scalar('Accuracy', accuracy)
+    writer.add_scalar('Precision', precision)
+    writer.add_scalar('Recall', recall)
+    writer.add_scalar('F1 Score', f1)
+    writer.add_scalar('AUC-ROC', auc_roc)
+
     print(f'Accuracy: {accuracy:.4f}')
     print(f'Precision: {precision:.4f}')
     print(f'Recall: {recall:.4f}')
