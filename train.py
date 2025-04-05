@@ -85,7 +85,7 @@ def predict_links(data, model, device, use_embeddings, use_mixed, threshold=0.5)
     
     return pos_pred, neg_pred, pos_edge_index, neg_edge_index
 
-def evaluate_model(pos_pred, neg_pred, writer):
+def evaluate_model(pos_pred, neg_pred, writer, evaluation_step=0):
     y_true = [1] * len(pos_pred) + [0] * len(neg_pred)
     y_pred = list(pos_pred) + list(neg_pred)
     
@@ -95,11 +95,11 @@ def evaluate_model(pos_pred, neg_pred, writer):
     f1 = f1_score(y_true, y_pred, zero_division=1)
     auc_roc = roc_auc_score(y_true, y_pred)
     
-    writer.add_scalar('evaluation/accuracy', accuracy)
-    writer.add_scalar('evaluation/precision', precision)
-    writer.add_scalar('evaluation/recall', recall)
-    writer.add_scalar('evaluation/f1_score', f1)
-    writer.add_scalar('evaluation/auc_roc', auc_roc)
+    writer.add_scalar('evaluation/accuracy', accuracy, evaluation_step)
+    writer.add_scalar('evaluation/precision', precision, evaluation_step)
+    writer.add_scalar('evaluation/recall', recall, evaluation_step)
+    writer.add_scalar('evaluation/f1_score', f1, evaluation_step)
+    writer.add_scalar('evaluation/auc_roc', auc_roc, evaluation_step)
 
     print(f'Accuracy: {accuracy:.4f}')
     print(f'Precision: {precision:.4f}')
@@ -124,7 +124,7 @@ def train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed
 
         # Evaluar el modelo
         pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, use_embeddings, use_mixed)
-        evaluate_model(pos_pred, neg_pred, writer)
+        evaluate_model(pos_pred, neg_pred, writer, evaluation_step=i)
 
 
 
@@ -233,7 +233,7 @@ model = LinkPredictor(in_channels=data.num_node_features, layer_sizes=layer_size
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
 # Entrenamos el modelo y lo evaluamos
-train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed, epochs_total=500, checkpoint_epochs=100, writer=writer)
+train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed, epochs_total=100, checkpoint_epochs=20, writer=writer)
 
 # Guardamos el modelo final
 torch.save(model.state_dict(), os.path.join(models_checkpoint_dir, 'final_model.pth'))
