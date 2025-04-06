@@ -20,11 +20,16 @@ import numpy as np
 import random
 import datetime
 
+######################################################################################
+## Modelos de entrenamiento                                                         ##
+######################################################################################
 
 # GCNLinkPredictor
 class GCNLinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_mixed):
         super(GCNLinkPredictor, self).__init__()
+        if use_mixed:
+            in_channels = in_channels * 2
         self.conv1 = GCNConv(in_channels, out_channels)
         self.conv2 = GCNConv(out_channels, out_channels)
 
@@ -36,8 +41,10 @@ class GCNLinkPredictor(torch.nn.Module):
 
 # GATLinkPredictor
 class GATLinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_mixed):
         super(GATLinkPredictor, self).__init__()
+        if use_mixed:
+            in_channels = in_channels * 2
         self.conv1 = GATConv(in_channels, out_channels)
         self.conv2 = GATConv(out_channels, out_channels)
 
@@ -49,8 +56,10 @@ class GATLinkPredictor(torch.nn.Module):
 
 # GATSAGELinkPredictor
 class GATSAGELinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_mixed):
         super(GATSAGELinkPredictor, self).__init__()
+        if use_mixed:
+            in_channels = in_channels * 2
         self.conv1 = SAGEConv(in_channels, out_channels)
         self.conv2 = SAGEConv(out_channels, out_channels)
 
@@ -62,8 +71,10 @@ class GATSAGELinkPredictor(torch.nn.Module):
 
 # VGAELinkPredictor
 class VGAELinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_mixed):
         super(VGAELinkPredictor, self).__init__()
+        if use_mixed:
+            in_channels = in_channels * 2
         self.conv1 = GCNConv(in_channels, out_channels)
         self.conv2 = GCNConv(out_channels, out_channels)
         self.vgae = VGAE(self.conv1)
@@ -102,21 +113,21 @@ class LinkPredictor(torch.nn.Module):
             raise TypeError("layer_sizes debe ser una lista de enteros.")
         
         if gnn_type == 'GCN':
-            self.gnn_model = GCNLinkPredictor(in_channels, layer_sizes[0])
+            self.gnn_model = GCNLinkPredictor(in_channels, layer_sizes[0], use_mixed)
         elif gnn_type == 'GAT':
-            self.gnn_model = GATLinkPredictor(in_channels, layer_sizes[0])
+            self.gnn_model = GATLinkPredictor(in_channels, layer_sizes[0], use_mixed)
         elif gnn_type == 'GATSAGE':
-            self.gnn_model = GATSAGELinkPredictor(in_channels, layer_sizes[0])
+            self.gnn_model = GATSAGELinkPredictor(in_channels, layer_sizes[0], use_mixed)
         elif gnn_type == 'VGAE':
-            self.gnn_model = VGAELinkPredictor(in_channels, layer_sizes[0])
+            self.gnn_model = VGAELinkPredictor(in_channels, layer_sizes[0], use_mixed)
         else:
             raise ValueError(f"Unknown predictor type: {gnn_type}")
         
         layers = []
         for i in range(len(layer_sizes) - 1):
-            if use_mixed:
-                layers.append(ResidualBlock(layer_sizes[i]*4, layer_sizes[i + 1]*4))
-            else:
+            # if use_mixed:
+            #     layers.append(ResidualBlock(layer_sizes[i]*4, layer_sizes[i + 1]*4))
+            # else:
                 layers.append(ResidualBlock(layer_sizes[i]*2, layer_sizes[i + 1]*2))
         self.net = torch.nn.Sequential(*layers)
         

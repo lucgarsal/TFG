@@ -27,8 +27,8 @@ from model import LinkPredictor
 ######################################################################################
 ## Variables de configuración                                                       ##
 ######################################################################################
-USE_EMBEDDINGS = True
-USE_MIXED = False
+USE_EMBEDDINGS = False
+USE_MIXED = True
 GNN_TYPE = 'GATSAGE'
 
 ######################################################################################
@@ -134,7 +134,7 @@ def train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed
 
 # Cargar el dataset
 dataset = Planetoid(root='/tmp/Pubmed', name='Pubmed')
-print(f"Dataset: {dataset.data}")
+#print(f"Dataset: {dataset.data}")
 data = dataset[0]
 
 # Imputamos los embeddings de los nodos en el dataset
@@ -197,7 +197,7 @@ print(f"Estructura de los datos: {data}")
 # Crear carpeta con timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 # path_name = f"uso_embeddings-{USE_EMBEDDINGS}_uso_mixto-{USE_MIXED}_tipo_gnn-{GNN_TYPE}_{timestamp}"
-model_name = f"embeddings-{USE_EMBEDDINGS}_mixed-{USE_MIXED}_gnn-{GNN_TYPE}_{timestamp}"
+model_name = f"{dataset.name}_embeddings-{USE_EMBEDDINGS}_mixed-{USE_MIXED}_gnn-{GNN_TYPE}_{timestamp}"
 log_dir = os.path.join("logs", model_name)
 models_checkpoint_dir = os.path.join(log_dir, "models")
 
