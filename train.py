@@ -85,6 +85,8 @@ def predict_links(data, model, device, use_embeddings, use_mixed, threshold=0.5)
     
     return pos_pred, neg_pred, pos_edge_index, neg_edge_index
 
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+
 def evaluate_model(pos_pred, neg_pred, writer, evaluation_step=0):
     y_true = [1] * len(pos_pred) + [0] * len(neg_pred)
     y_pred = list(pos_pred) + list(neg_pred)
@@ -106,7 +108,8 @@ def evaluate_model(pos_pred, neg_pred, writer, evaluation_step=0):
     print(f'Recall: {recall:.4f}')
     print(f'F1 Score: {f1:.4f}')
     print(f'AUC-ROC: {auc_roc:.4f}')
-
+    
+    return accuracy, precision, recall, f1, auc_roc
 
 def train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed, writer, epochs_total=500, checkpoint_epochs=100):
     """Entrena y evalúa el modelo de predicción de enlaces.
@@ -124,7 +127,11 @@ def train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed
 
         # Evaluar el modelo
         pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, use_embeddings, use_mixed)
-        evaluate_model(pos_pred, neg_pred, writer, evaluation_step=i)
+        accuracy, precision, recall, f1, auc_roc = evaluate_model(pos_pred, neg_pred, writer, evaluation_step=i)
+
+        # Guardar las métricas en un archivo de texto
+        with open(os.path.join(log_dir, 'metrics.txt'), 'a') as f:
+            f.write(f'Epoch {(i+1)*checkpoint_epochs}, Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}, AUC-ROC: {auc_roc:.4f}\n')
 
 
 
