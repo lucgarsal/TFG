@@ -29,7 +29,7 @@ from model import LinkPredictor
 ######################################################################################
 USE_EMBEDDINGS = False
 USE_MIXED = True
-GNN_TYPE = 'GATSAGE'
+GNN_TYPE = 'VGAE'
 
 ######################################################################################
 ## Funciones Principales                                                            ##

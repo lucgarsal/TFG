@@ -74,16 +74,21 @@ class VGAELinkPredictor(torch.nn.Module):
     def __init__(self, in_channels, out_channels, use_mixed):
         super(VGAELinkPredictor, self).__init__()
         if use_mixed:
-            in_channels = in_channels * 2
-        self.conv1 = GCNConv(in_channels, out_channels)
-        self.conv2 = GCNConv(out_channels, out_channels)
-        self.vgae = VGAE(self.conv1)
+            in_channels *= 2
+        self.encoder_mu = GCNConv(in_channels, out_channels)
+        self.encoder_logstd = GCNConv(in_channels, out_channels)
+        self.vgae = VGAE(self._encode)
+
+    def _encode(self, x, edge_index):
+        mu = self.encoder_mu(x, edge_index)
+        logstd = self.encoder_logstd(x, edge_index)
+        return mu, logstd
 
     def forward(self, x, edge_index):
-        x = self.vgae.encode(x, edge_index)
-        x = F.relu(x)
-        x = self.vgae.decode(x, edge_index)
-        return x
+        z = self.vgae.encode(x, edge_index)
+        return z
+
+
 
     
 # Definimos el modelo para la predicción de enlaces. En primer lugar definimos un bloque residual para las capas. Esto sirve
