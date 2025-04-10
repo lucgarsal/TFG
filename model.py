@@ -55,9 +55,9 @@ class GATLinkPredictor(torch.nn.Module):
         return x
 
 # GATSAGELinkPredictor
-class GATSAGELinkPredictor(torch.nn.Module):
+class GraphSAGELinkPredictor(torch.nn.Module):
     def __init__(self, in_channels, out_channels, use_mixed):
-        super(GATSAGELinkPredictor, self).__init__()
+        super(GraphSAGELinkPredictor, self).__init__()
         if use_mixed:
             in_channels = in_channels * 2
         self.conv1 = SAGEConv(in_channels, out_channels)
@@ -121,8 +121,8 @@ class LinkPredictor(torch.nn.Module):
             self.gnn_model = GCNLinkPredictor(in_channels, layer_sizes[0], use_mixed)
         elif gnn_type == 'GAT':
             self.gnn_model = GATLinkPredictor(in_channels, layer_sizes[0], use_mixed)
-        elif gnn_type == 'GATSAGE':
-            self.gnn_model = GATSAGELinkPredictor(in_channels, layer_sizes[0], use_mixed)
+        elif gnn_type == 'GraphSAGE':
+            self.gnn_model = GraphSAGELinkPredictor(in_channels, layer_sizes[0], use_mixed)
         elif gnn_type == 'VGAE':
             self.gnn_model = VGAELinkPredictor(in_channels, layer_sizes[0], use_mixed)
         else:
@@ -145,17 +145,19 @@ class LinkPredictor(torch.nn.Module):
 
     def forward(self, data, edge_index, use_embeddings, use_mixed):
         if use_embeddings:
-            x = self.gnn_model(data.embeddings, edge_index)
+            x = self.gnn_model(data.embeddings, data.edge_index)
         elif use_mixed:
             x = torch.cat([data.x, data.embeddings], dim=1)
-            x = self.gnn_model(x, edge_index)
+            x = self.gnn_model(x, data.edge_index)
         else:
             x = self.gnn_model(data.x, data.edge_index)
+
         edge_index=edge_index.long()
         src_idx, dest_idx = edge_index
         x_i = x[src_idx]
         x_j = x[dest_idx]
         x = torch.cat([x_i, x_j], dim=-1)
+
         x = self.net(x)
         x= self.final_layer(x)
         res=torch.sigmoid(x)

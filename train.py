@@ -18,18 +18,24 @@ from torch.utils.tensorboard import SummaryWriter
 import pykeen
 from pykeen.pipeline import pipeline
 from pykeen.triples import TriplesFactory
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 import numpy as np
 import random
 import datetime
 
 from model import LinkPredictor
+from data_treatment import preprocessing
 
 ######################################################################################
 ## Variables de configuración                                                       ##
 ######################################################################################
-USE_EMBEDDINGS = False
-USE_MIXED = False
-GNN_TYPE = 'GCN'
+valid_combinations = [
+    (False, False),  # caracteristicas nodos
+    (True, False),   # embeddings
+    (False, True)    # embeddings + caracteristicas nodos
+]
+
+gnn_types = ['GCN', 'GAT', 'GraphSAGE', 'VGAE']
 
 ######################################################################################
 ## Funciones Principales                                                            ##
@@ -61,11 +67,6 @@ def train_link_predictor(data, model, optimizer, device, use_embeddings, use_mix
         writer.add_scalar('train/pos_loss', pos_loss.item(), epoch+epoch_delay)
         writer.add_scalar('train/neg_loss', neg_loss.item(), epoch+epoch_delay)
 
-        
-
-        # if epoch % 100 == 0:
-        #     print(f'Epoch {epoch}, Loss: {loss.item()}')
-        #     # Save the model every 100 epochs
 
 def predict_links(data, model, device, use_embeddings, use_mixed, threshold=0.5):
     model.eval()
@@ -84,8 +85,6 @@ def predict_links(data, model, device, use_embeddings, use_mixed, threshold=0.5)
     neg_pred = (neg_out > threshold).cpu().numpy()
     
     return pos_pred, neg_pred, pos_edge_index, neg_edge_index
-
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
 def evaluate_model(pos_pred, neg_pred, writer, evaluation_step=0):
     y_true = [1] * len(pos_pred) + [0] * len(neg_pred)
@@ -111,7 +110,7 @@ def evaluate_model(pos_pred, neg_pred, writer, evaluation_step=0):
     
     return accuracy, precision, recall, f1, auc_roc
 
-def train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed, writer, epochs_total=500, checkpoint_epochs=100):
+def train_and_evaluate(data, model, optimizer, device, models_checkpoint_dir, log_dir, use_embeddings, use_mixed, writer, epochs_total=500, checkpoint_epochs=100):
     """Entrena y evalúa el modelo de predicción de enlaces.
     Cada checkpoint_epochs, guarda el modelo y evalúa su rendimiento.
     """
@@ -133,116 +132,44 @@ def train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed
         with open(os.path.join(log_dir, 'metrics.txt'), 'a') as f:
             f.write(f'Epoch {(i+1)*checkpoint_epochs}, Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}, AUC-ROC: {auc_roc:.4f}\n')
 
+def run_experiment(USE_EMBEDDINGS, USE_MIXED, GNN_TYPE):
+    # Crear carpeta con timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # path_name = f"uso_embeddings-{USE_EMBEDDINGS}_uso_mixto-{USE_MIXED}_tipo_gnn-{GNN_TYPE}_{timestamp}"
+    model_name = f"{dataset.name}PCA_embeddings-{USE_EMBEDDINGS}_mixed-{USE_MIXED}_gnn-{GNN_TYPE}_{timestamp}"
+    log_dir = os.path.join("logs", model_name)
+    models_checkpoint_dir = os.path.join(log_dir, "models")
 
+    os.makedirs(models_checkpoint_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Inicializar TensorBoard
+    writer = SummaryWriter(log_dir=log_dir)
+
+    # Inicializamos el modelo de predicción de enlaces y el optimizador
+    layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
+
+    model = LinkPredictor(in_channels=data.num_node_features, layer_sizes=layer_sizes, gnn_type=GNN_TYPE, use_mixed=USE_MIXED).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+    # Entrenamos el modelo y lo evaluamos
+    train_and_evaluate(data, model, optimizer, device,models_checkpoint_dir,log_dir, use_embeddings, use_mixed, epochs_total=100, checkpoint_epochs=20, writer=writer)
+
+    # Guardamos el modelo final
+    torch.save(model.state_dict(), os.path.join(models_checkpoint_dir, 'final_model.pth'))
+
+    writer.close()
 
 ######################################################################################
-## Código Principal                                                                 ##
+## Selección de aristas y variables de entrenamiento                                ##
 ######################################################################################
-
-# Cargar el dataset
 dataset = Planetoid(root='/tmp/Pubmed', name='Pubmed')
-#print(f"Dataset: {dataset.data}")
-data = dataset[0]
+use_pca=True
+data = preprocessing(dataset, use_pca)
 
-# Imputamos los embeddings de los nodos en el dataset
-data.embeddings = torch.tensor(np.load(f'data/embeddings_TransE_{dataset.name}.npy'), dtype=torch.float32).to(data.x.device)
-
-# Preprocesado básico de los datos
-
-# Quitamos los nodos aislados
-# data.x, data.edge_index, data.y, mask = remove_isolated_nodes(data.x, data.edge_index, data.y)
-
-# La normalización se realiza automáticamente con el transform=NormalizeFeatures() al cargar el dataset
-# Si las características numéricas tuviesen rangos muy distintos, también podemos normalizarlas usando un escalador
-"""
-scaler = StandardScaler()
-data.x = torch.tensor(scaler.fit_transform(data.x.numpy()), dtype=torch.float32)
-"""
-
-# Si queremos trabajar con un grafo no dirigido, duplicamos las aristas.
-#data.edge_index = to_undirected(data.edge_index)
-
-# Si x tiene muchas dimensiones, podemos aplicar PCA o t-SNE.
-"""
-pca = PCA(n_components=100)  # Reducimos a 100 dimensiones
-data.x = torch.tensor(pca.fit_transform(data.x.numpy()), dtype=torch.float32)
-"""
-
-# División de Datos
-# En este caso, los dataset de Planetoid ya vienen con una división predefinida en entrenamiento, validación y prueba
-train_mask = data.train_mask
-val_mask = data.val_mask
-test_mask = data.test_mask
-
-# Asignar las máscaras al objeto data
-data.train_mask = train_mask
-data.val_mask = val_mask
-data.test_mask = test_mask
-
-#Función de generación de máscaras aleatorias para entrenamiento, validación y prueba
-"""
-def generate_random_masks(data, train_ratio=0.8, val_ratio=0.1):
-    num_nodes = data.num_nodes
-    indices = torch.randperm(num_nodes)
-
-    train_size = int(num_nodes * train_ratio)
-    val_size = int(num_nodes * val_ratio)
-
-    train_mask = torch.zeros(num_nodes, dtype=torch.bool)
-    val_mask = torch.zeros(num_nodes, dtype=torch.bool)
-    test_mask = torch.zeros(num_nodes, dtype=torch.bool)
-
-    train_mask[indices[:train_size]] = True
-    val_mask[indices[train_size:train_size + val_size]] = True
-    test_mask[indices[train_size + val_size:]] = True
-
-    return train_mask, val_mask, test_mask
-"""
-
-"""
-print(f'Número de nodos de entrenamiento: {data.train_mask.sum()}')
-print(f'Número de nodos de validación: {data.val_mask.sum()}')
-print(f'Número de nodos de prueba: {data.test_mask.sum()}')
-"""
-
-# Mostrar características del conjunto de datos
-"""
-print(f'Número de nodos: {data.num_nodes}')
-print(f'Número de features por nodo: {data.num_node_features}')
-print(f'Número de clases: {dataset.num_classes}')
-print(f'Número de enlaces: {data.num_edges}')
-print(f'Grado medio de los nodos: {data.num_edges / data.num_nodes:.2f}')
-print(f'Número de nodos de entrenamiento: {data.train_mask.sum()}')
-print(f'Número de nodos de validación: {data.val_mask.sum()}')
-print(f'Número de nodos de prueba: {data.test_mask.sum()}')
-print(f'Contiene nodos aislados: {data.has_isolated_nodes()}')
-print(f'Contiene bucles: {data.has_self_loops()}')
-print(f'No es dirigido: {data.is_undirected()}')
-print(f"Estructura de los datos: {data}")
-"""
-
-# Crear carpeta con timestamp
-timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-# path_name = f"uso_embeddings-{USE_EMBEDDINGS}_uso_mixto-{USE_MIXED}_tipo_gnn-{GNN_TYPE}_{timestamp}"
-model_name = f"{dataset.name}_embeddings-{USE_EMBEDDINGS}_mixed-{USE_MIXED}_gnn-{GNN_TYPE}_{timestamp}"
-log_dir = os.path.join("logs", model_name)
-models_checkpoint_dir = os.path.join(log_dir, "models")
-
-os.makedirs(models_checkpoint_dir, exist_ok=True)
-os.makedirs(log_dir, exist_ok=True)
-
-# Inicializar TensorBoard
-writer = SummaryWriter(log_dir=log_dir)
-
-# Inicializamos el modelo de predicción de enlaces y el optimizador
-
-layer_sizes = [data.num_node_features * 2, 64, 32, 16] if isinstance(data.num_node_features, int) else data.num_node_features
-#Habia un problema porque data.num_node_features es un tensor y no un entero
-# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-device = torch.device('cpu')
-
-use_embeddings = USE_EMBEDDINGS
-use_mixed = USE_MIXED 
+device='cpu'
 graph = data
 edge_list = graph.edge_index
 #Lo movemos todos al mismo dispositivo
@@ -255,23 +182,7 @@ num_sampled_edges = int(0.5 * num_edges)  # Por ejemplo, selecciona el 50% de la
 sampled_indices = torch.randperm(num_edges, device=device)[:num_sampled_edges]
 sampled_edge_index = edge_list[:, sampled_indices].to(device).long()
 
-
-model = LinkPredictor(in_channels=data.num_node_features, layer_sizes=layer_sizes, gnn_type=GNN_TYPE, use_mixed=USE_MIXED).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-
-# Entrenamos el modelo y lo evaluamos
-train_and_evaluate(data, model, optimizer, device, use_embeddings, use_mixed, epochs_total=100, checkpoint_epochs=20, writer=writer)
-
-# Guardamos el modelo final
-torch.save(model.state_dict(), os.path.join(models_checkpoint_dir, 'final_model.pth'))
-
-writer.close()
-
-# # Entrenamos el modelo
-# train_link_predictor(data, model, optimizer, device, use_embeddings, use_mixed,epochs=100)
-# pos_pred, neg_pred, pos_edge_index, neg_edge_index = predict_links(data, model, device, use_embeddings, use_mixed)
-
-
-
-# writer.close()
-# evaluate_model(pos_pred, neg_pred)
+for use_embeddings, use_mixed in valid_combinations:
+    for gnn_type in gnn_types:
+        print(f"Ejecutando experimento con Embeddings={use_embeddings}, Mixto={use_mixed}, GNN={gnn_type}")
+        run_experiment(use_embeddings, use_mixed, gnn_type)
