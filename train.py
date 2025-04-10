@@ -28,8 +28,8 @@ from model import LinkPredictor
 ## Variables de configuración                                                       ##
 ######################################################################################
 USE_EMBEDDINGS = False
-USE_MIXED = True
-GNN_TYPE = 'VGAE'
+USE_MIXED = False
+GNN_TYPE = 'GCN'
 
 ######################################################################################
 ## Funciones Principales                                                            ##
@@ -160,7 +160,7 @@ data.x = torch.tensor(scaler.fit_transform(data.x.numpy()), dtype=torch.float32)
 """
 
 # Si queremos trabajar con un grafo no dirigido, duplicamos las aristas.
-# data.edge_index = to_undirected(data.edge_index)
+#data.edge_index = to_undirected(data.edge_index)
 
 # Si x tiene muchas dimensiones, podemos aplicar PCA o t-SNE.
 """
@@ -178,6 +178,26 @@ test_mask = data.test_mask
 data.train_mask = train_mask
 data.val_mask = val_mask
 data.test_mask = test_mask
+
+#Función de generación de máscaras aleatorias para entrenamiento, validación y prueba
+"""
+def generate_random_masks(data, train_ratio=0.8, val_ratio=0.1):
+    num_nodes = data.num_nodes
+    indices = torch.randperm(num_nodes)
+
+    train_size = int(num_nodes * train_ratio)
+    val_size = int(num_nodes * val_ratio)
+
+    train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+    val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+    test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+
+    train_mask[indices[:train_size]] = True
+    val_mask[indices[train_size:train_size + val_size]] = True
+    test_mask[indices[train_size + val_size:]] = True
+
+    return train_mask, val_mask, test_mask
+"""
 
 """
 print(f'Número de nodos de entrenamiento: {data.train_mask.sum()}')
