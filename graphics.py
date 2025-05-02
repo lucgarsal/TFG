@@ -15,14 +15,15 @@ METRICS = {
     "evaluation/accuracy": "accuracy",
     "evaluation/recall": "recall",
     "evaluation/f1_score": "f1_score",
-    "evaluation/auc_roc": "auc_roc"
+    "evaluation/auc_roc": "auc_roc",
+    "evaluation/precision": "precision",
 }
 
 # Estructura: results[dataset][metric][(use_emb, use_mix)][gnn_type] = (steps, values)
 results = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
 
 folder_pattern = re.compile(
-    r'(?P<dataset>\w+)PCA_embeddings-(?P<use_emb>True|False)_mixed-(?P<use_mix>True|False)_gnn-(?P<gnn_type>\w+)_\d+'
+    r'(?P<dataset>\w+)_embeddings-(?P<use_emb>True|False)_mixed-(?P<use_mix>True|False)_gnn-(?P<gnn_type>\w+)_\d+'
 )
 
 all_gnn_types = set()
