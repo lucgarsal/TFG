@@ -2,6 +2,7 @@ import os
 from matplotlib import pyplot as plt
 from sklearn.manifold import TSNE
 from torch_geometric.datasets import Planetoid
+
 import torch
 import torch.nn.functional as F
 from torch_geometric.utils import negative_sampling

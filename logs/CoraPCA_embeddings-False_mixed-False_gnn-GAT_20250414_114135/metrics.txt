@@ -1,0 +1,5 @@
+Epoch 20, Accuracy: 0.5271, Precision: 0.8875, Recall: 0.0621, F1 Score: 0.1160, AUC-ROC: 0.5271
+Epoch 40, Accuracy: 0.6136, Precision: 0.5827, Recall: 0.8005, F1 Score: 0.6745, AUC-ROC: 0.6136
+Epoch 60, Accuracy: 0.6380, Precision: 0.8033, Recall: 0.3656, F1 Score: 0.5025, AUC-ROC: 0.6380
+Epoch 80, Accuracy: 0.6877, Precision: 0.7022, Recall: 0.6518, F1 Score: 0.6760, AUC-ROC: 0.6877
+Epoch 100, Accuracy: 0.7453, Precision: 0.7727, Recall: 0.6950, F1 Score: 0.7318, AUC-ROC: 0.7453

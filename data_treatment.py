@@ -22,6 +22,7 @@ from pykeen.triples import TriplesFactory
 import numpy as np
 import random
 import datetime
+from torch_geometric.utils import degree
 from compute_embeddings1 import generate_embeddings
 
 ######################################################################################
@@ -29,9 +30,33 @@ from compute_embeddings1 import generate_embeddings
 ######################################################################################
 def preprocessing(dataset, use_pca):
     data = dataset[0]
-    # Quitamos los nodos aislados si existiesen
+    # Quitamos los nodos aislados si existiesen. NO FUNCIONA REMOVE_ISOLATED_NODES
     if data.has_isolated_nodes():
-        data.x, data.edge_index, data.y, mask = remove_isolated_nodes(data.x, data.edge_index, data.y)
+        #Calculamos el grado de cada nodo
+        deg = degree(data.edge_index[0], data.num_nodes)
+        non_isolated_mask = deg > 0
+        non_isolated_nodes = non_isolated_mask.nonzero(as_tuple=True)[0]
+
+        #Mapeamos índices antiguos a nuevos
+        old_to_new = -torch.ones(data.num_nodes, dtype=torch.long)
+        old_to_new[non_isolated_nodes] = torch.arange(non_isolated_nodes.size(0))
+
+        #Reindexamos aristas y filtramos las que conectan nodos no aislados
+        mask_edge = non_isolated_mask[data.edge_index[0]] & non_isolated_mask[data.edge_index[1]]
+        new_edge_index = data.edge_index[:, mask_edge]
+        new_edge_index = old_to_new[new_edge_index]
+
+        #Filtramos datos del grafo
+        data.x = data.x[non_isolated_nodes]
+        data.y = data.y[non_isolated_nodes]
+        data.edge_index = new_edge_index
+        data.num_nodes = non_isolated_nodes.size(0)
+
+        #Filtra máscaras si existen
+        for mask_name in ['train_mask', 'val_mask', 'test_mask']:
+            mask = getattr(data, mask_name, None)
+            if mask is not None:
+                setattr(data, mask_name, mask[non_isolated_nodes])
     
     # La normalización se realiza automáticamente con el transform=NormalizeFeatures() al cargar el dataset
     # Si las características numéricas tuviesen rangos muy distintos, también podemos normalizarlas usando un escalador
@@ -40,22 +65,26 @@ def preprocessing(dataset, use_pca):
     data.x = torch.tensor(scaler.fit_transform(data.x.numpy()), dtype=torch.float32)
     """
     # Si el grafo es dirigido, lo convertimos a no dirigido
-    if data.is_undirected():
+    if not data.is_undirected():
         data.edge_index = to_undirected(data.edge_index)
+
+    #Si tiene self loops, los eliminamos
+    if data.has_self_loops():
+        data.edge_index, _ = remove_self_loops(data.edge_index)
     
     # Si la dimensionalidad es muy grande, podemos aplicar PCA para reducirla. Lo recibiremos como parámetro.
     if use_pca:
-        pca = PCA(n_components=0.85)  # Reducimos a un 85% de la varianza explicada
+        pca = PCA(n_components=0.9)  # Reducimos a un 90% de la varianza explicada
         data.x = torch.tensor(pca.fit_transform(data.x.numpy()), dtype=torch.float32)
         dataset.data.x = data.x
 
-        # Imputamos los embeddings de los nodos en el dataset
-        generate_embeddings(dataset)
+        generate_embeddings(data, dataset.name)
         data.embeddings = torch.tensor(np.load(f'data/embeddings_TransE_{dataset.name}PCA.npy'), dtype=torch.float32).to(data.x.device)
     else:
-        generate_embeddings(dataset)
+        generate_embeddings(data, dataset.name)
         data.embeddings = torch.tensor(np.load(f'data/embeddings_TransE_{dataset.name}.npy'), dtype=torch.float32).to(data.x.device)
-    
+
+    print("Embeddings shape:", data.embeddings.shape)
     # Si el dataset ya tiene las máscaras de train, val y test, las asignamos. Si no, generamos unas aleatorias.
     if hasattr(data, 'train_mask') and hasattr(data, 'val_mask') and hasattr(data, 'test_mask'):
         train_mask = data.train_mask
@@ -81,9 +110,6 @@ def preprocessing(dataset, use_pca):
     data.val_mask = val_mask
     data.test_mask = test_mask
     
-    #Si tiene self loops, los eliminamos
-    if data.has_self_loops():
-        data.edge_index, _ = (data.edge_index)
 
     return data
     

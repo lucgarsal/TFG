@@ -22,6 +22,8 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 import numpy as np
 import random
 import datetime
+from torch_geometric.datasets import Coauthor
+from torch_geometric.datasets import AttributedGraphDataset
 
 from model import LinkPredictor
 from data_treatment import preprocessing
@@ -30,8 +32,8 @@ from data_treatment import preprocessing
 ## Variables de configuración                                                       ##
 ######################################################################################
 valid_combinations = [
-    (False, False),  # caracteristicas nodos
-    (True, False),   # embeddings
+    #(False, False),  # caracteristicas nodos
+    #(True, False),   # embeddings
     (False, True)    # embeddings + caracteristicas nodos
 ]
 
@@ -135,7 +137,6 @@ def train_and_evaluate(data, model, optimizer, device, models_checkpoint_dir, lo
 def run_experiment(USE_EMBEDDINGS, USE_MIXED, GNN_TYPE):
     # Crear carpeta con timestamp
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # path_name = f"uso_embeddings-{USE_EMBEDDINGS}_uso_mixto-{USE_MIXED}_tipo_gnn-{GNN_TYPE}_{timestamp}"
     model_name = f"{dataset.name}PCA_embeddings-{USE_EMBEDDINGS}_mixed-{USE_MIXED}_gnn-{GNN_TYPE}_{timestamp}"
     log_dir = os.path.join("logs", model_name)
     models_checkpoint_dir = os.path.join(log_dir, "models")
@@ -163,20 +164,22 @@ def run_experiment(USE_EMBEDDINGS, USE_MIXED, GNN_TYPE):
     writer.close()
 
 ######################################################################################
-## Selección de aristas y variables de entrenamiento                                ##
+## Preprocesado y entrenamiento                                                     ##
 ######################################################################################
-dataset = Planetoid(root='/tmp/Pubmed', name='Pubmed')
+dataset = AttributedGraphDataset(root='data/Facebook', name='Facebook', transform=NormalizeFeatures())
+dataset = Planetoid(root='data/CiteSeer', name='CiteSeer', transform=NormalizeFeatures())
+data= dataset[0]
 use_pca=True
 data = preprocessing(dataset, use_pca)
 
 device='cpu'
 graph = data
 edge_list = graph.edge_index
+
 #Lo movemos todos al mismo dispositivo
 graph = graph.to(device)
 edge_list = edge_list.to(device).long()
 
-# Seleccionamos aleatoriamente algunas aristas del edge_index
 num_edges = edge_list.size(1)
 num_sampled_edges = int(0.5 * num_edges)  # Por ejemplo, selecciona el 50% de las aristas
 sampled_indices = torch.randperm(num_edges, device=device)[:num_sampled_edges]
@@ -186,3 +189,5 @@ for use_embeddings, use_mixed in valid_combinations:
     for gnn_type in gnn_types:
         print(f"Ejecutando experimento con Embeddings={use_embeddings}, Mixto={use_mixed}, GNN={gnn_type}")
         run_experiment(use_embeddings, use_mixed, gnn_type)
+
+ 
