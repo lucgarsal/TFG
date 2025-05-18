@@ -4,7 +4,6 @@ from matplotlib.lines import Line2D
 import matplotlib.pyplot as plt
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 from collections import defaultdict
-import itertools
 
 LOG_DIR = "logs"
 OUTPUT_DIR = "graphics"
@@ -19,11 +18,11 @@ METRICS = {
     "evaluation/precision": "precision",
 }
 
-# Estructura: results[dataset][metric][(use_emb, use_mix)][gnn_type] = (steps, values)
+# Estructura: results[dataset][metric][(use_emb, use_both)][gnn_type] = (epochs, values)
 results = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
 
 folder_pattern = re.compile(
-    r'(?P<dataset>\w+)_embeddings-(?P<use_emb>True|False)_mixed-(?P<use_mix>True|False)_gnn-(?P<gnn_type>\w+)_\d+'
+    r'(?P<dataset>\w+)_embeddings-(?P<use_emb>True|False)_both-(?P<use_both>True|False)_gnn-(?P<gnn_type>\w+)_\d+'
 )
 
 all_gnn_types = set()
@@ -39,10 +38,10 @@ for root, dirs, files in os.walk(LOG_DIR):
 
             dataset = match.group("dataset")
             use_emb = match.group("use_emb") == "True"
-            use_mix = match.group("use_mix") == "True"
+            use_both = match.group("use_both") == "True"
             gnn_type = match.group("gnn_type")
             all_gnn_types.add(gnn_type)
-            all_input_combinations.add((use_emb, use_mix))
+            all_input_combinations.add((use_emb, use_both))
 
             try:
                 ea = EventAccumulator(path)
@@ -55,11 +54,11 @@ for root, dirs, files in os.walk(LOG_DIR):
                     events = ea.Scalars(tb_tag)
                     steps = [e.step for e in events]
                     values = [e.value for e in events]
-                    results[dataset][metric_name][(use_emb, use_mix)][gnn_type] = (steps, values)
+                    results[dataset][metric_name][(use_emb, use_both)][gnn_type] = (steps, values)
             except Exception as e:
                 print(f"Error procesando {path}: {e}")
 
-# Asignar colores por combinación de entrada
+# Asignamos colores por combinación de entrada
 color_map = {
     (False, False): 'red',
     (True, False): 'green',
@@ -68,22 +67,22 @@ color_map = {
 
 # Estilos únicos por tipo de GNN
 gnn_linestyles = {
-    'GAT': '-',          # línea continua
-    'GCN': '--',         # guiones
-    'GraphSAGE': '-.',   # guion-punto
-    'VGAE': ':'          # punteada
+    'GAT': '-',          
+    'GCN': '--',         
+    'GraphSAGE': '-.',   
+    'VGAE': ':'          
 }
 
 # Expresión regular para extraer el tipo de GNN (sin la fecha)
 gnn_type_pattern = re.compile(r'^[A-Za-z]+')
 
-# Graficar por dataset y métrica
+# Grafica por dataset y métrica
 for dataset, metrics_dict in results.items():
     for metric, input_combo_dict in metrics_dict.items():
         plt.figure(figsize=(12, 7))
 
-        for (use_emb, use_mix), gnn_data in input_combo_dict.items():
-            color = color_map.get((use_emb, use_mix), 'black')
+        for (use_emb, use_both), gnn_data in input_combo_dict.items():
+            color = color_map.get((use_emb, use_both), 'black')
             for gnn_type, (steps, values) in gnn_data.items():
                 gnn_type_clean = gnn_type_pattern.match(gnn_type).group(0)
                 linestyle = gnn_linestyles.get(gnn_type_clean, '-')
@@ -105,9 +104,9 @@ for dataset, metrics_dict in results.items():
 
         # Leyenda de colores (tipo de entrada)
         input_legend = [
-            Line2D([0], [0], color='red', lw=2, label='Emb: False, Mix: False'),
-            Line2D([0], [0], color='green', lw=2, label='Emb: True, Mix: False'),
-            Line2D([0], [0], color='blue', lw=2, label='Emb: False, Mix: True')
+            Line2D([0], [0], color='red', lw=2, label='Emb: False, Both: False'),
+            Line2D([0], [0], color='green', lw=2, label='Emb: True, Both: False'),
+            Line2D([0], [0], color='blue', lw=2, label='Emb: False, Both: True')
         ]
 
         # Leyenda de estilos de línea (tipo de GNN)

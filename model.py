@@ -1,25 +1,8 @@
-import os
-from matplotlib import pyplot as plt
-from sklearn.manifold import TSNE
-from torch_geometric.datasets import Planetoid
 
 import torch
 import torch.nn.functional as F
-from torch_geometric.utils import negative_sampling
-from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, accuracy_score
-from torch_geometric.transforms import NormalizeFeatures
-from torch_geometric.utils import remove_isolated_nodes
-from sklearn.preprocessing import StandardScaler
-from torch_geometric.utils import to_undirected
-from sklearn.decomposition import PCA
 from torch_geometric.nn import GCNConv, GATConv, VGAE, SAGEConv
-from torch.utils.tensorboard import SummaryWriter
-import pykeen
-from pykeen.pipeline import pipeline
-from pykeen.triples import TriplesFactory
-import numpy as np
-import random
-import datetime
+
 
 ######################################################################################
 ## Modelos de entrenamiento                                                         ##
@@ -27,9 +10,9 @@ import datetime
 
 # GCNLinkPredictor
 class GCNLinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, use_mixed):
+    def __init__(self, in_channels, out_channels, use_both):
         super(GCNLinkPredictor, self).__init__()
-        if use_mixed:
+        if use_both:
             in_channels = in_channels * 2
         self.conv1 = GCNConv(in_channels, out_channels)
         self.conv2 = GCNConv(out_channels, out_channels)
@@ -42,9 +25,9 @@ class GCNLinkPredictor(torch.nn.Module):
 
 # GATLinkPredictor
 class GATLinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, use_mixed):
+    def __init__(self, in_channels, out_channels, use_both):
         super(GATLinkPredictor, self).__init__()
-        if use_mixed:
+        if use_both:
             in_channels = in_channels * 2
         self.conv1 = GATConv(in_channels, out_channels)
         self.conv2 = GATConv(out_channels, out_channels)
@@ -57,9 +40,9 @@ class GATLinkPredictor(torch.nn.Module):
 
 # GATSAGELinkPredictor
 class GraphSAGELinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, use_mixed):
+    def __init__(self, in_channels, out_channels, use_both):
         super(GraphSAGELinkPredictor, self).__init__()
-        if use_mixed:
+        if use_both:
             in_channels = in_channels * 2
         self.conv1 = SAGEConv(in_channels, out_channels)
         self.conv2 = SAGEConv(out_channels, out_channels)
@@ -72,9 +55,9 @@ class GraphSAGELinkPredictor(torch.nn.Module):
 
 # VGAELinkPredictor
 class VGAELinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, use_mixed):
+    def __init__(self, in_channels, out_channels, use_both):
         super(VGAELinkPredictor, self).__init__()
-        if use_mixed:
+        if use_both:
             in_channels *= 2
         self.encoder_mu = GCNConv(in_channels, out_channels)
         self.encoder_logstd = GCNConv(in_channels, out_channels)
@@ -113,27 +96,24 @@ class ResidualBlock(torch.nn.Module):
         return self.relu(out + residual)
 
 class LinkPredictor(torch.nn.Module):
-    def __init__(self, in_channels, layer_sizes, gnn_type, use_mixed):
+    def __init__(self, in_channels, layer_sizes, gnn_type, use_both):
         super(LinkPredictor, self).__init__()
         if isinstance(layer_sizes, int):
             raise TypeError("layer_sizes debe ser una lista de enteros.")
         
         if gnn_type == 'GCN':
-            self.gnn_model = GCNLinkPredictor(in_channels, layer_sizes[0], use_mixed)
+            self.gnn_model = GCNLinkPredictor(in_channels, layer_sizes[0], use_both)
         elif gnn_type == 'GAT':
-            self.gnn_model = GATLinkPredictor(in_channels, layer_sizes[0], use_mixed)
+            self.gnn_model = GATLinkPredictor(in_channels, layer_sizes[0], use_both)
         elif gnn_type == 'GraphSAGE':
-            self.gnn_model = GraphSAGELinkPredictor(in_channels, layer_sizes[0], use_mixed)
+            self.gnn_model = GraphSAGELinkPredictor(in_channels, layer_sizes[0], use_both)
         elif gnn_type == 'VGAE':
-            self.gnn_model = VGAELinkPredictor(in_channels, layer_sizes[0], use_mixed)
+            self.gnn_model = VGAELinkPredictor(in_channels, layer_sizes[0], use_both)
         else:
             raise ValueError(f"Unknown predictor type: {gnn_type}")
         
         layers = []
         for i in range(len(layer_sizes) - 1):
-            # if use_mixed:
-            #     layers.append(ResidualBlock(layer_sizes[i]*4, layer_sizes[i + 1]*4))
-            # else:
                 layers.append(ResidualBlock(layer_sizes[i]*2, layer_sizes[i + 1]*2))
         self.net = torch.nn.Sequential(*layers)
         
@@ -144,10 +124,10 @@ class LinkPredictor(torch.nn.Module):
     #Finalmente pasamos por las capas residuales cuyos tamaños se definen en layer_sizes
     #y por la capa final que nos da la predicción de si existe o no un enlace entre los nodos
 
-    def forward(self, data, edge_index, use_embeddings, use_mixed):
+    def forward(self, data, edge_index, use_embeddings, use_both):
         if use_embeddings:
             x = self.gnn_model(data.embeddings, data.edge_index)
-        elif use_mixed:
+        elif use_both:
             x = torch.cat([data.x, data.embeddings], dim=1)
             x = self.gnn_model(x, data.edge_index)
         else:

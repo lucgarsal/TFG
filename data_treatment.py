@@ -1,27 +1,10 @@
 
-import os
-from matplotlib import pyplot as plt
-from sklearn.manifold import TSNE
-from torch_geometric.datasets import Planetoid
 import torch
-import torch.nn as nn
-import tqdm
-import torch.nn.functional as F
-from torch_geometric.utils import negative_sampling
-from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score, accuracy_score
-from torch_geometric.transforms import NormalizeFeatures
 from torch_geometric.utils import remove_isolated_nodes, remove_self_loops
 from sklearn.preprocessing import StandardScaler
 from torch_geometric.utils import to_undirected
 from sklearn.decomposition import PCA
-from torch_geometric.nn import GCNConv, GATConv, VGAE, SAGEConv
-from torch.utils.tensorboard import SummaryWriter
-import pykeen
-from pykeen.pipeline import pipeline
-from pykeen.triples import TriplesFactory
 import numpy as np
-import random
-import datetime
 from torch_geometric.utils import degree
 from compute_embeddings1 import generate_embeddings
 
@@ -52,7 +35,7 @@ def preprocessing(dataset, use_pca):
         data.edge_index = new_edge_index
         data.num_nodes = non_isolated_nodes.size(0)
 
-        #Filtra máscaras si existen
+        #Filtramos máscaras si existen
         for mask_name in ['train_mask', 'val_mask', 'test_mask']:
             mask = getattr(data, mask_name, None)
             if mask is not None:
@@ -84,7 +67,6 @@ def preprocessing(dataset, use_pca):
         generate_embeddings(data, dataset.name)
         data.embeddings = torch.tensor(np.load(f'data/embeddings_TransE_{dataset.name}.npy'), dtype=torch.float32).to(data.x.device)
 
-    print("Embeddings shape:", data.embeddings.shape)
     # Si el dataset ya tiene las máscaras de train, val y test, las asignamos. Si no, generamos unas aleatorias.
     if hasattr(data, 'train_mask') and hasattr(data, 'val_mask') and hasattr(data, 'test_mask'):
         train_mask = data.train_mask

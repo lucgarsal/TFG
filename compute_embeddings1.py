@@ -14,7 +14,7 @@ def generate_embeddings(data, dataset_name):
     subjects = edge_index[0].numpy()
     objects = edge_index[1].numpy()
 
-    # Convertir a string para usar como etiquetas en PyKEEN
+    # Convertimos a string para usar como etiquetas en PyKEEN
     subjects = list(map(str, subjects))
     objects = list(map(str, objects))
 
@@ -33,7 +33,7 @@ def generate_embeddings(data, dataset_name):
     all_objects = np.concatenate([objects, subjects, self_loop_objects])
     all_predicates = ['connected_to'] * (len(subjects) + len(objects)) + self_loop_predicates
 
-    # Crear DataFrame de triples
+    # Creamos el DataFrame de triples
     triples_df = pd.DataFrame({
         'subject': all_subjects,
         'predicate': all_predicates,
@@ -43,7 +43,7 @@ def generate_embeddings(data, dataset_name):
     if triples_df.empty:
         raise ValueError("El DataFrame de triples está vacío. Verifica los datos de entrada.")
 
-    # Crear TriplesFactory (solo las tres columnas necesarias)
+    # Creamos TriplesFactory (solo las tres columnas necesarias)
     triples_factory = TriplesFactory.from_labeled_triples(
         triples=triples_df[['subject', 'predicate', 'object']].values
     )
@@ -51,7 +51,7 @@ def generate_embeddings(data, dataset_name):
     if triples_factory.num_triples == 0:
         raise ValueError("No se han creado triples válidos para entrenamiento.")
 
-    # Definir el modelo
+    # Definimos el modelo
     embedding_dim = data.num_features or 50  # fallback si no hay features
     model = TransE(
         triples_factory=triples_factory,
@@ -72,7 +72,7 @@ def generate_embeddings(data, dataset_name):
         batch_size=min(256, triples_factory.num_triples),
     )
 
-    # Obtener embeddings
+    # Obtenemos embeddings
     entity_embeddings = model.entity_representations[0]().detach().cpu().numpy()
     np.save(f'./data/embeddings_TransE_{dataset_name}PCA.npy', entity_embeddings)
 
